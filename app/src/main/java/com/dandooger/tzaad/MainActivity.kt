@@ -67,6 +67,7 @@ sealed interface Screen {
     data object Today : Screen
     data class Detail(val id: String) : Screen
     data class Edit(val id: String?) : Screen
+    data object Reorder : Screen
 }
 
 class MainActivity : ComponentActivity() {
@@ -124,7 +125,13 @@ fun App(onReminderSet: () -> Unit) {
                 today,
                 open = { screen = Screen.Detail(it) },
                 add = { screen = Screen.Edit(null) },
+                reorder = { screen = Screen.Reorder },
             )
+
+            Screen.Reorder -> {
+                BackHandler { screen = Screen.Today }
+                ReorderScreen(back = { screen = Screen.Today })
+            }
 
             is Screen.Detail -> {
                 BackHandler { screen = Screen.Today }
@@ -150,12 +157,14 @@ fun App(onReminderSet: () -> Unit) {
 // ───────────────────────── Today ─────────────────────────
 
 @Composable
-fun TodayScreen(today: LocalDate, open: (String) -> Unit, add: () -> Unit) {
+fun TodayScreen(today: LocalDate, open: (String) -> Unit, add: () -> Unit, reorder: () -> Unit) {
     Store.version.value
     val rest = JewishDays.restName(today)
-    val todays = Store.habits.filter { it.required(today) }
-    val others = Store.habits.filter { !it.required(today) }
-    val done = todays.count { it.done(today) }
+    val todays = Store.habits.filter { it.activeOn(today) }
+    val others = Store.habits.filter { !it.activeOn(today) }
+    // Today's score counts the daily habits; weekly ones have their own weekly goal.
+    val daily = todays.filter { !it.isWeekly }
+    val done = daily.count { it.done(today) }
 
     Scaffold(
         containerColor = Bg,
@@ -170,9 +179,9 @@ fun TodayScreen(today: LocalDate, open: (String) -> Unit, add: () -> Unit) {
             contentPadding = PaddingValues(16.dp, 16.dp, 16.dp, 96.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            item { Header(today) }
+            item { Header(today, if (Store.habits.size > 1) reorder else null) }
             if (rest != null) item { RestBanner(rest) }
-            if (todays.isNotEmpty()) item { ProgressCard(done, todays.size) }
+            if (daily.isNotEmpty()) item { ProgressCard(done, daily.size) }
             if (Store.habits.isEmpty()) item { EmptyState(add) }
             items(todays, key = { it.id }) { h ->
                 HabitCard(h, today, active = true, onOpen = { open(h.id) })
@@ -193,7 +202,7 @@ fun TodayScreen(today: LocalDate, open: (String) -> Unit, add: () -> Unit) {
 }
 
 @Composable
-fun Header(today: LocalDate) {
+fun Header(today: LocalDate, reorder: (() -> Unit)?) {
     val hour = LocalTime.now().hour
     val hello = when {
         hour in 5..11 -> "בוקר טוב"
@@ -204,7 +213,10 @@ fun Header(today: LocalDate) {
     val greg = today.format(DateTimeFormatter.ofPattern("EEEE, d 'ב'MMMM", HE))
     val heb = JewishDays.hebrewDate(today)
     Column(Modifier.padding(bottom = 4.dp)) {
-        Text("צעד", fontSize = 30.sp, fontWeight = FontWeight.Bold, color = Blue)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("צעד", fontSize = 30.sp, fontWeight = FontWeight.Bold, color = Blue, modifier = Modifier.weight(1f))
+            if (reorder != null) TextButton(onClick = reorder) { Text("↕ סדר", fontSize = 16.sp) }
+        }
         Text("$hello, דניאל 👋", fontSize = 20.sp, fontWeight = FontWeight.Medium)
         Text(if (heb.isEmpty()) greg else "$greg · $heb", fontSize = 14.sp, color = Gray)
     }
@@ -268,8 +280,12 @@ fun HabitCard(h: Habit, today: LocalDate, active: Boolean, onOpen: () -> Unit) {
     var showWheel by remember { mutableStateOf(false) }
     if (showWheel) AmountDialog(h) { showWheel = false }
 
+    val week = weekStart(today)
+    val countText = if (h.type == HabitType.COUNT) "$c מתוך ${h.target} · " else ""
     val subtitle = when {
         !active && JewishDays.isRestDay(today) -> "🔥 רצף: $streak – שמור"
+        h.isWeekly && !active -> "✓ השלמת את השבוע · 🔥 $streak שבועות"
+        h.isWeekly -> "${countText}השבוע: ${h.weekCount(week)} מתוך ${h.weekGoal(week)} · 🔥 $streak שבועות"
         !active -> "לא מתוכנן להיום · 🔥 $streak"
         h.type == HabitType.QUIT && slipped -> "נפלת היום – מחר מתחילים מחדש 💙"
         h.type == HabitType.QUIT -> "💪 $streak ימים ברצף בלי"
@@ -362,7 +378,14 @@ fun DetailScreen(h: Habit, today: LocalDate, back: () -> Unit, edit: () -> Unit)
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Stat(if (h.type == HabitType.QUIT) "ימים בלי" else "רצף עכשיו", "${h.streak(today)} 🔥")
+            Stat(
+                when {
+                    h.type == HabitType.QUIT -> "ימים בלי"
+                    h.isWeekly -> "שבועות ברצף"
+                    else -> "רצף עכשיו"
+                },
+                "${h.streak(today)} 🔥",
+            )
             Stat("השיא שלי", "${h.bestStreak(today)}")
             Stat("ימים שהצלחתי", "${h.totalDone(today)}")
         }
@@ -377,9 +400,12 @@ fun DetailScreen(h: Habit, today: LocalDate, back: () -> Unit, edit: () -> Unit)
 
         Legend()
 
-        val daysText = if (h.days.size == WEEK.size) "כל יום חוץ משבת"
-        else WEEK.filter { it in h.days }.joinToString(" ") { DAY_LETTERS.getValue(it) + "׳" }
-        Text("📅 ימים: $daysText", color = Gray, fontSize = 14.sp)
+        val daysText = when {
+            h.isWeekly -> "${h.perWeek} פעמים בשבוע, באיזה יום שבא לך"
+            h.days.size == WEEK.size -> "כל יום חוץ משבת"
+            else -> WEEK.filter { it in h.days }.joinToString(" ") { DAY_LETTERS.getValue(it) + "׳" }
+        }
+        Text("📅 $daysText", color = Gray, fontSize = 14.sp)
         h.reminder?.let { Text("⏰ תזכורת: ${fmtTime(it)}", color = Gray, fontSize = 14.sp) }
         if (h.type == HabitType.COUNT) Text("🎯 מטרה: ${h.target} ביום", color = Gray, fontSize = 14.sp)
     }
@@ -488,7 +514,10 @@ fun EditScreen(existing: Habit?, onDone: () -> Unit, onDeleted: () -> Unit, onRe
     var target by remember { mutableStateOf(existing?.takeIf { it.type == HabitType.COUNT }?.target ?: 8) }
     var days by remember { mutableStateOf(existing?.days ?: WEEK.toSet()) }
     var reminder by remember { mutableStateOf(existing?.reminder) }
+    var weekly by remember { mutableStateOf((existing?.perWeek ?: 0) > 0) }
+    var perWeek by remember { mutableStateOf(existing?.perWeek?.takeIf { it > 0 } ?: 2) }
     var error by remember { mutableStateOf<String?>(null) }
+    val isWeekly = weekly && type != HabitType.QUIT
     var confirmDelete by remember { mutableStateOf(false) }
 
     Column(
@@ -536,15 +565,28 @@ fun EditScreen(existing: Habit?, onDone: () -> Unit, onDeleted: () -> Unit, onRe
             }
         }
 
-        Label("באילו ימים?")
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            WEEK.forEach { d ->
-                DayChip(DAY_LETTERS.getValue(d), d in days, rest = false) {
-                    days = if (d in days) days - d else days + d
-                    error = null
-                }
+        if (type != HabitType.QUIT) {
+            Label("באיזו תדירות?")
+            Choice("📅  בימים קבועים", "בוחרים באילו ימים בשבוע", !weekly) { weekly = false; error = null }
+            Choice("🗓️  כמה פעמים בשבוע", "באיזה יום שבא לך. למשל: ריצה פעמיים בשבוע", weekly) { weekly = true; error = null }
+        }
+
+        if (isWeekly) {
+            Label("כמה פעמים בשבוע? גלול למספר")
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                NumberWheel(perWeek, 1, 6) { perWeek = it }
             }
-            DayChip("ש", selected = false, rest = true) {}
+        } else {
+            Label("באילו ימים?")
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                WEEK.forEach { d ->
+                    DayChip(DAY_LETTERS.getValue(d), d in days, rest = false) {
+                        days = if (d in days) days - d else days + d
+                        error = null
+                    }
+                }
+                DayChip("ש", selected = false, rest = true) {}
+            }
         }
         Text("🕯️ שבת וחגים הם ימי מנוחה – הרצף לא נשבר בהם", fontSize = 13.sp, color = Gold)
 
@@ -573,7 +615,7 @@ fun EditScreen(existing: Habit?, onDone: () -> Unit, onDeleted: () -> Unit, onRe
             onClick = {
                 when {
                     name.isBlank() -> error = "צריך לתת שם להרגל"
-                    days.isEmpty() -> error = "צריך לבחור לפחות יום אחד"
+                    !isWeekly && days.isEmpty() -> error = "צריך לבחור לפחות יום אחד"
                     else -> {
                         val base = existing ?: Habit(name = "", emoji = "", type = type)
                         Store.saveHabit(
@@ -581,7 +623,9 @@ fun EditScreen(existing: Habit?, onDone: () -> Unit, onDeleted: () -> Unit, onRe
                             base.copy(
                                 name = name.trim(), emoji = emoji, type = type,
                                 target = if (type == HabitType.COUNT) target else 1,
-                                days = days, reminder = reminder,
+                                days = if (days.isEmpty()) WEEK.toSet() else days,
+                                reminder = reminder,
+                                perWeek = if (isWeekly) perWeek else 0,
                             ),
                         )
                         if (reminder != null) onReminderSet()

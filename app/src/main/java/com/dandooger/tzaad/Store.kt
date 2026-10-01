@@ -20,6 +20,8 @@ data class Habit(
     // Minutes after midnight, or null for no reminder.
     val reminder: Int? = null,
     val created: String = LocalDate.now().toString(),
+    // 0 = on the chosen days. 1–6 = that many times a week, any day (then `days` is unused).
+    val perWeek: Int = 0,
 )
 
 /** All data lives on the phone, in SharedPreferences as JSON. */
@@ -50,6 +52,7 @@ object Store {
                 days = (0 until days.length()).map { days.getInt(it) }.toSet(),
                 reminder = if (o.has("reminder")) o.getInt("reminder") else null,
                 created = o.getString("created"),
+                perWeek = o.optInt("perWeek", 0),
             )
         }
         val lo = JSONObject(p.getString("log", "{}"))
@@ -72,6 +75,7 @@ object Store {
                 put("days", JSONArray(h.days.toList()))
                 if (h.reminder != null) put("reminder", h.reminder)
                 put("created", h.created)
+                put("perWeek", h.perWeek)
             })
         }
         val lo = JSONObject()
@@ -122,6 +126,15 @@ object Store {
         changed(ctx)
     }
 
+    /** New order from the drag screen – the app list and the widget follow it. */
+    fun reorder(ctx: Context, ids: List<String>) {
+        val byId = habits.associateBy { it.id }
+        val sorted = ids.mapNotNull { byId[it] }
+        habits.clear()
+        habits += sorted
+        changed(ctx)
+    }
+
     fun deleteHabit(ctx: Context, id: String) {
         habits.removeAll { it.id == id }
         log.values.forEach { it.remove(id) }
@@ -135,9 +148,29 @@ fun Habit.createdDate(): LocalDate = LocalDate.parse(created)
 /** Big counted habits use the number wheel; small ones (like 8 cups) stay one tap = +1. */
 fun Habit.usesWheel() = type == HabitType.COUNT && target > 10
 
-/** Does this habit count on that day? Never on Shabbat or a holiday. */
-fun Habit.required(date: LocalDate) =
-    !date.isBefore(createdDate()) && !JewishDays.isRestDay(date) && date.dayOfWeek.value in days
+val Habit.isWeekly get() = perWeek > 0 && type != HabitType.QUIT
+
+/** A day the habit can be done on at all: from its start, never Shabbat or a holiday. */
+fun Habit.available(date: LocalDate) = !date.isBefore(createdDate()) && !JewishDays.isRestDay(date)
+
+/** Is this habit due on that day? Weekly habits are never due on a specific day. */
+fun Habit.required(date: LocalDate) = !isWeekly && available(date) && date.dayOfWeek.value in days
+
+// ── Weekly habits: the week runs Sunday–Shabbat ──
+
+fun weekStart(date: LocalDate): LocalDate = date.minusDays((date.dayOfWeek.value % 7).toLong())
+
+/** How many times it was done in the week starting on [start]. */
+fun Habit.weekCount(start: LocalDate) = (0L..6L).count { done(start.plusDays(it)) }
+
+/** The goal for that week – smaller if a holiday leaves fewer days. */
+fun Habit.weekGoal(start: LocalDate) = minOf(perWeek, (0L..6L).count { available(start.plusDays(it)) })
+
+fun Habit.weekComplete(date: LocalDate) = weekCount(weekStart(date)) >= weekGoal(weekStart(date))
+
+/** Show it on today's list (and in the widget)? */
+fun Habit.activeOn(date: LocalDate) =
+    if (isWeekly) available(date) && (!weekComplete(date) || done(date)) else required(date)
 
 fun Habit.done(date: LocalDate): Boolean {
     val c = Store.count(this, date)
@@ -153,6 +186,7 @@ fun Habit.done(date: LocalDate): Boolean {
  * are skipped, so they never break the streak. Today only counts once it's done.
  */
 fun Habit.streak(today: LocalDate = LocalDate.now()): Int {
+    if (isWeekly) return weekStreak(today)
     var s = 0
     var d = today
     val start = createdDate()
@@ -166,7 +200,43 @@ fun Habit.streak(today: LocalDate = LocalDate.now()): Int {
     return s
 }
 
+/** Weeks in a row the goal was reached. This week only counts once it's reached. */
+private fun Habit.weekStreak(today: LocalDate): Int {
+    var s = 0
+    val thisWeek = weekStart(today)
+    var w = thisWeek
+    val first = weekStart(createdDate())
+    while (!w.isBefore(first)) {
+        val goal = weekGoal(w)
+        if (goal > 0) {
+            if (weekCount(w) >= goal) s++
+            else if (w != thisWeek) return s
+        }
+        w = w.minusWeeks(1)
+    }
+    return s
+}
+
+private fun Habit.bestWeekStreak(today: LocalDate): Int {
+    var best = 0
+    var run = 0
+    val thisWeek = weekStart(today)
+    var w = weekStart(createdDate())
+    while (!w.isAfter(thisWeek)) {
+        val goal = weekGoal(w)
+        if (goal > 0) {
+            if (weekCount(w) >= goal) {
+                run++
+                if (run > best) best = run
+            } else if (w != thisWeek) run = 0
+        }
+        w = w.plusWeeks(1)
+    }
+    return best
+}
+
 fun Habit.bestStreak(today: LocalDate = LocalDate.now()): Int {
+    if (isWeekly) return bestWeekStreak(today)
     var best = 0
     var run = 0
     var d = createdDate()

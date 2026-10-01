@@ -72,16 +72,18 @@ class TzaadWidget : AppWidgetProvider() {
             val today = LocalDate.now()
             val rest = JewishDays.restName(today)
             // "Quit" habits stay out of the widget so a stray tap can't mark a slip.
-            val list = Store.habits.filter { it.type != HabitType.QUIT && it.required(today) }
+            val list = Store.habits.filter { it.type != HabitType.QUIT && it.activeOn(today) }
 
             v.setOnClickPendingIntent(R.id.header, openApp(ctx))
-            val doneCount = list.count { it.done(today) }
+            // Today's score counts the daily habits; weekly ones have their own weekly goal.
+            val daily = list.filter { !it.isWeekly }
+            val doneCount = daily.count { it.done(today) }
             v.setTextViewText(
                 R.id.progress,
                 when {
-                    list.isEmpty() -> ""
-                    doneCount == list.size -> "הכול בוצע ✓"
-                    else -> "$doneCount מתוך ${list.size}"
+                    daily.isEmpty() -> ""
+                    doneCount == daily.size -> "הכול בוצע ✓"
+                    else -> "$doneCount מתוך ${daily.size}"
                 }
             )
 
@@ -106,7 +108,15 @@ class TzaadWidget : AppWidgetProvider() {
                 val done = h.done(today)
                 v.setViewVisibility(ROWS[i], View.VISIBLE)
                 v.setTextViewText(NAMES[i], "${h.emoji} ${h.name}")
-                v.setTextViewText(PROGS[i], if (h.type == HabitType.COUNT) "$c/${h.target}" else "")
+                val week = weekStart(today)
+                v.setTextViewText(
+                    PROGS[i],
+                    when {
+                        h.type == HabitType.COUNT -> "$c/${h.target}"
+                        h.isWeekly -> "השבוע ${h.weekCount(week)}/${h.weekGoal(week)}"
+                        else -> ""
+                    },
+                )
                 v.setTextViewText(BTNS[i], if (done) "✓" else if (h.type == HabitType.COUNT) "+" else "")
                 v.setTextColor(BTNS[i], if (done) BLUE else WHITE)
                 v.setInt(BTNS[i], "setBackgroundResource", if (done) R.drawable.btn_done else R.drawable.btn_todo)

@@ -45,7 +45,8 @@ object Reminders {
         val now = System.currentTimeMillis()
         var d = LocalDate.now()
         repeat(30) {
-            if (h.required(d)) {
+            val due = if (h.isWeekly) h.available(d) && !h.weekComplete(d) else h.required(d)
+            if (due) {
                 val erev = d.dayOfWeek == DayOfWeek.FRIDAY || JewishDays.isErev(d)
                 val minutes = if (erev) minOf(rem, EREV_LATEST) else rem
                 val t = d.atStartOfDay(zone).plusMinutes(minutes.toLong()).toInstant().toEpochMilli()
@@ -110,7 +111,7 @@ class ReminderReceiver : BroadcastReceiver() {
             Reminders.ACTION_REMIND -> {
                 val h = Store.habit(intent.getStringExtra("habit") ?: return)
                 val today = LocalDate.now()
-                if (h != null && h.required(today) && (h.type == HabitType.QUIT || !h.done(today))) {
+                if (h != null && h.activeOn(today) && (h.type == HabitType.QUIT || !h.done(today))) {
                     Reminders.show(ctx, h)
                 }
                 Reminders.scheduleAll(ctx)
