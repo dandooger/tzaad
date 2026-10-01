@@ -107,6 +107,15 @@ object Store {
         }
     }
 
+    /** Add (or, with a negative amount, remove) several at once – from the number wheel. */
+    fun add(ctx: Context, h: Habit, date: LocalDate, amount: Int) {
+        prefs(ctx).edit().putInt("last_${h.id}", kotlin.math.abs(amount)).apply()
+        setCount(ctx, h, date, (count(h, date) + amount).coerceIn(0, 9999))
+    }
+
+    /** The amount last added with the wheel, so the wheel starts there next time. */
+    fun lastAdd(ctx: Context, h: Habit) = prefs(ctx).getInt("last_${h.id}", 1)
+
     fun saveHabit(ctx: Context, h: Habit) {
         val i = habits.indexOfFirst { it.id == h.id }
         if (i >= 0) habits[i] = h else habits += h
@@ -122,6 +131,9 @@ object Store {
 }
 
 fun Habit.createdDate(): LocalDate = LocalDate.parse(created)
+
+/** Big counted habits use the number wheel; small ones (like 8 cups) stay one tap = +1. */
+fun Habit.usesWheel() = type == HabitType.COUNT && target > 10
 
 /** Does this habit count on that day? Never on Shabbat or a holiday. */
 fun Habit.required(date: LocalDate) =

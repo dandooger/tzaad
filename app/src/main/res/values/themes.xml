@@ -7,4 +7,14 @@
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:colorAccent">@color/blue</item>
     </style>
+
+    <!-- Transparent window: only the number-wheel dialog shows, over the home screen -->
+    <style name="Theme.Tzaad.Popup" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:colorAccent">@color/blue</item>
+    </style>
 </resources>

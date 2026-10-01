@@ -90,10 +90,14 @@ object Reminders {
             .setContentIntent(TzaadWidget.openApp(ctx))
             .setAutoCancel(true)
         if (h.type != HabitType.QUIT) {
-            val label = if (h.type == HabitType.COUNT) "+1" else "✓ עשיתי"
-            b.addAction(
-                Notification.Action.Builder(null as Icon?, label, TzaadWidget.tapIntent(ctx, h.id, notifId)).build()
-            )
+            val label = when {
+                h.usesWheel() -> "הוסף"
+                h.type == HabitType.COUNT -> "+1"
+                else -> "✓ עשיתי"
+            }
+            val action = if (h.usesWheel()) AddActivity.pending(ctx, h.id, notifId)
+            else TzaadWidget.tapIntent(ctx, h.id, notifId)
+            b.addAction(Notification.Action.Builder(null as Icon?, label, action).build())
         }
         nm.notify(notifId, b.build())
     }

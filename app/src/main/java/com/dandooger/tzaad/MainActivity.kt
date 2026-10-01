@@ -83,20 +83,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         Store.load(this)
         setContent {
-            MaterialTheme(
-                colorScheme = lightColorScheme(
-                    primary = Blue,
-                    onPrimary = Color.White,
-                    primaryContainer = LightBlue,
-                    onPrimaryContainer = DarkBlue,
-                    background = Bg,
-                    surface = Color.White,
-                )
-            ) {
-                CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
-                    App(onReminderSet = ::ensureNotificationPermission)
-                }
-            }
+            TzaadTheme { App(onReminderSet = ::ensureNotificationPermission) }
         }
     }
 
@@ -106,6 +93,22 @@ class MainActivity : ComponentActivity() {
         Store.version.value++
         TzaadWidget.refresh(this)
         Reminders.scheduleAll(this)
+    }
+}
+
+@Composable
+fun TzaadTheme(content: @Composable () -> Unit) {
+    MaterialTheme(
+        colorScheme = lightColorScheme(
+            primary = Blue,
+            onPrimary = Color.White,
+            primaryContainer = LightBlue,
+            onPrimaryContainer = DarkBlue,
+            background = Bg,
+            surface = Color.White,
+        )
+    ) {
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl, content = content)
     }
 }
 
@@ -262,6 +265,8 @@ fun HabitCard(h: Habit, today: LocalDate, active: Boolean, onOpen: () -> Unit) {
     val streak = h.streak(today)
     val highlight = active && done && h.type != HabitType.QUIT
     val slipped = h.type == HabitType.QUIT && c > 0
+    var showWheel by remember { mutableStateOf(false) }
+    if (showWheel) AmountDialog(h) { showWheel = false }
 
     val subtitle = when {
         !active && JewishDays.isRestDay(today) -> "🔥 רצף: $streak – שמור"
@@ -298,7 +303,9 @@ fun HabitCard(h: Habit, today: LocalDate, active: Boolean, onOpen: () -> Unit) {
         if (active) {
             when (h.type) {
                 HabitType.CHECK -> TapCircle(done, "") { Store.tap(ctx, h, today) }
-                HabitType.COUNT -> {
+                HabitType.COUNT -> if (h.usesWheel()) {
+                    TapCircle(done, "+") { showWheel = true }
+                } else {
                     if (c > 0) {
                         TextButton(onClick = { Store.setCount(ctx, h, today, c - 1) }) {
                             Text("−", fontSize = 22.sp, color = Gray)
@@ -523,11 +530,9 @@ fun EditScreen(existing: Habit?, onDone: () -> Unit, onDeleted: () -> Unit, onRe
         Choice("🚫  להפסיק משהו", "הצלחה = לא עשיתי. למשל: בלי ממתקים", type == HabitType.QUIT) { type = HabitType.QUIT }
 
         if (type == HabitType.COUNT) {
-            Label("כמה פעמים ביום?")
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                RoundButton("−") { if (target > 2) target-- }
-                Text("$target", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = DarkBlue)
-                RoundButton("+") { if (target < 50) target++ }
+            Label("כמה פעמים ביום? גלול למספר")
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                NumberWheel(target, 2, MAX_WHEEL) { target = it }
             }
         }
 
@@ -631,14 +636,6 @@ fun Choice(title: String, sub: String, selected: Boolean, onClick: () -> Unit) {
         Text(title, fontWeight = FontWeight.Bold, color = if (selected) DarkBlue else Color.Black)
         Text(sub, fontSize = 13.sp, color = Gray)
     }
-}
-
-@Composable
-fun RoundButton(label: String, onClick: () -> Unit) {
-    Box(
-        Modifier.size(44.dp).clip(CircleShape).background(LightBlue).clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) { Text(label, fontSize = 24.sp, color = Blue, fontWeight = FontWeight.Bold) }
 }
 
 @Composable

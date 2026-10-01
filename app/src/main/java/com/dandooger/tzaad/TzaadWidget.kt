@@ -110,7 +110,10 @@ class TzaadWidget : AppWidgetProvider() {
                 v.setTextViewText(BTNS[i], if (done) "✓" else if (h.type == HabitType.COUNT) "+" else "")
                 v.setTextColor(BTNS[i], if (done) BLUE else WHITE)
                 v.setInt(BTNS[i], "setBackgroundResource", if (done) R.drawable.btn_done else R.drawable.btn_todo)
-                v.setOnClickPendingIntent(ROWS[i], tapIntent(ctx, h.id))
+                v.setOnClickPendingIntent(
+                    ROWS[i],
+                    if (h.usesWheel()) AddActivity.pending(ctx, h.id) else tapIntent(ctx, h.id),
+                )
             }
             return v
         }
