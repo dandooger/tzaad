@@ -23,10 +23,10 @@ object JewishDays {
         val m = c.get(Calendar.MONTH)
         val d = c.get(Calendar.DAY_OF_MONTH)
         return when {
-            m == HebrewCalendar.TISHREI && (d == 1 || d == 2) -> "ראש השנה"
-            m == HebrewCalendar.TISHREI && d == 10 -> "יום כיפור"
-            m == HebrewCalendar.TISHREI && d == 15 -> "סוכות"
-            m == HebrewCalendar.TISHREI && d == 22 -> "שמחת תורה"
+            m == HebrewCalendar.TISHRI && (d == 1 || d == 2) -> "ראש השנה"
+            m == HebrewCalendar.TISHRI && d == 10 -> "יום כיפור"
+            m == HebrewCalendar.TISHRI && d == 15 -> "סוכות"
+            m == HebrewCalendar.TISHRI && d == 22 -> "שמחת תורה"
             m == HebrewCalendar.NISAN && d == 15 -> "פסח"
             m == HebrewCalendar.NISAN && d == 21 -> "שביעי של פסח"
             m == HebrewCalendar.SIVAN && d == 6 -> "שבועות"
