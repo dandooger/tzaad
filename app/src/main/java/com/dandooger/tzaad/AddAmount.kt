@@ -107,6 +107,13 @@ class AddActivity : ComponentActivity() {
         }
         val notif = intent.getIntExtra("notif", 0)
         if (notif != 0) getSystemService(NotificationManager::class.java).cancel(notif)
+        if (!h.usesWheel()) {
+            // A tap on a small habit in the widget list: mark it and vanish – no window.
+            Store.tap(this, h, LocalDate.now())
+            finish()
+            @Suppress("DEPRECATION") overridePendingTransition(0, 0)
+            return
+        }
         setContent { TzaadTheme { AmountDialog(h) { finish() } } }
     }
 

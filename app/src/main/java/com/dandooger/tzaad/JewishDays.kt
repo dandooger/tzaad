@@ -10,7 +10,8 @@ import java.time.ZoneId
 
 /** Shabbat and Yom Tov (Israel schedule) – days when streaks are protected. */
 object JewishDays {
-    private val cache = HashMap<LocalDate, String>()
+    // Concurrent: the widget list reads it from a background thread.
+    private val cache = java.util.concurrent.ConcurrentHashMap<LocalDate, String>()
 
     private fun hebrew(date: LocalDate): HebrewCalendar {
         val c = HebrewCalendar()

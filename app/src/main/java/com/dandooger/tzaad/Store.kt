@@ -36,6 +36,7 @@ object Store {
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("tzaad", Context.MODE_PRIVATE)
 
+    @Synchronized
     fun load(ctx: Context) {
         if (loaded) return
         val p = prefs(ctx)
