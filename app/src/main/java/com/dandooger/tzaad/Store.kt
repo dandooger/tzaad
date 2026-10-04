@@ -96,6 +96,8 @@ object Store {
     fun count(h: Habit, date: LocalDate) = log[date.toString()]?.get(h.id) ?: 0
 
     fun setCount(ctx: Context, h: Habit, date: LocalDate, value: Int) {
+        // Closed on Shabbat and chag – nothing can be marked.
+        if (JewishDays.restNow()) return
         val key = date.toString()
         val m = log.getOrPut(key) { mutableMapOf() }
         if (value <= 0) m.remove(h.id) else m[h.id] = value
@@ -154,8 +156,25 @@ val Habit.isWeekly get() = perWeek > 0 && type != HabitType.QUIT
 /** A day the habit can be done on at all: from its start, never Shabbat or a holiday. */
 fun Habit.available(date: LocalDate) = !date.isBefore(createdDate()) && !JewishDays.isRestDay(date)
 
-/** Is this habit due on that day? Weekly habits are never due on a specific day. */
-fun Habit.required(date: LocalDate) = !isWeekly && available(date) && date.dayOfWeek.value in days
+/** On the list for that day (picked day, not Shabbat/chag). Weekly habits have no fixed days. */
+fun Habit.scheduled(date: LocalDate) = !isWeekly && available(date) && date.dayOfWeek.value in days
+
+/**
+ * Must be done or the streak breaks. Erev Shabbat/chag is a short day, so there it's
+ * only a bonus – except for "quit" habits, where a slip still counts.
+ */
+fun Habit.required(date: LocalDate) =
+    scheduled(date) && (type == HabitType.QUIT || !JewishDays.isErev(date))
+
+/** Done on a day it wasn't required (erev, or motzaei Shabbat) – adds to the streak, never breaks it. */
+fun Habit.bonus(date: LocalDate) =
+    type != HabitType.QUIT && !isWeekly && !date.isBefore(createdDate()) && !required(date) &&
+        (scheduled(date) || JewishDays.isRestDay(date)) && done(date)
+
+/** Can it be marked on that day (in the app list and the widget)? */
+fun Habit.markableOn(date: LocalDate) =
+    activeOn(date) ||
+        (JewishDays.isRestDay(date) && type != HabitType.QUIT && !isWeekly && !date.isBefore(createdDate()))
 
 // ── Weekly habits: the week runs Sunday–Shabbat ──
 
@@ -171,7 +190,7 @@ fun Habit.weekComplete(date: LocalDate) = weekCount(weekStart(date)) >= weekGoal
 
 /** Show it on today's list (and in the widget)? */
 fun Habit.activeOn(date: LocalDate) =
-    if (isWeekly) available(date) && (!weekComplete(date) || done(date)) else required(date)
+    if (isWeekly) available(date) && (!weekComplete(date) || done(date)) else scheduled(date)
 
 fun Habit.done(date: LocalDate): Boolean {
     val c = Store.count(this, date)
@@ -195,7 +214,7 @@ fun Habit.streak(today: LocalDate = LocalDate.now()): Int {
         if (required(d)) {
             if (done(d)) s++
             else if (d != today || type == HabitType.QUIT) return s
-        }
+        } else if (bonus(d)) s++
         d = d.minusDays(1)
     }
     return s
@@ -247,6 +266,9 @@ fun Habit.bestStreak(today: LocalDate = LocalDate.now()): Int {
                 run++
                 if (run > best) best = run
             } else if (d != today || type == HabitType.QUIT) run = 0
+        } else if (bonus(d)) {
+            run++
+            if (run > best) best = run
         }
         d = d.plusDays(1)
     }

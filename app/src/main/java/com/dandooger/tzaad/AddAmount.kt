@@ -101,7 +101,9 @@ class AddActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         Store.load(this)
         val h = intent.getStringExtra("habit")?.let { Store.habit(it) }
-        if (h == null) {
+        if (h == null || JewishDays.restNow()) {
+            // Shabbat/chag: closed. Make sure the widget shows it.
+            TzaadWidget.refresh(this)
             finish()
             return
         }

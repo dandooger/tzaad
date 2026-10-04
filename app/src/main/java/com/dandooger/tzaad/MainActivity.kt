@@ -118,9 +118,19 @@ fun App(onReminderSet: () -> Unit) {
     Store.version.value
     var screen by remember { mutableStateOf<Screen>(Screen.Today) }
     val today = LocalDate.now()
+    // Check the clock every half minute, so the app closes/opens right on time.
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(30_000)
+            Store.version.value++
+        }
+    }
+    val rest = JewishDays.currentRest()
 
     Surface(Modifier.fillMaxSize(), color = Bg) {
-        when (val s = screen) {
+        if (rest != null) {
+            ShabbatScreen(rest)
+        } else when (val s = screen) {
             Screen.Today -> TodayScreen(
                 today,
                 open = { screen = Screen.Detail(it) },
@@ -160,11 +170,12 @@ fun App(onReminderSet: () -> Unit) {
 fun TodayScreen(today: LocalDate, open: (String) -> Unit, add: () -> Unit, reorder: () -> Unit) {
     Store.version.value
     val rest = JewishDays.restName(today)
-    val todays = Store.habits.filter { it.activeOn(today) }
-    val others = Store.habits.filter { !it.activeOn(today) }
+    val todays = Store.habits.filter { it.markableOn(today) }
+    val others = Store.habits.filter { !it.markableOn(today) }
     // Today's score counts the daily habits; weekly ones have their own weekly goal.
-    val daily = todays.filter { !it.isWeekly }
+    val daily = todays.filter { it.scheduled(today) }
     val done = daily.count { it.done(today) }
+    val candle = JewishDays.candleToday(today)
 
     Scaffold(
         containerColor = Bg,
@@ -180,7 +191,8 @@ fun TodayScreen(today: LocalDate, open: (String) -> Unit, add: () -> Unit, reord
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             item { Header(today, if (Store.habits.size > 1) reorder else null) }
-            if (rest != null) item { RestBanner(rest) }
+            if (rest != null) item { MotzaeiBanner(rest) }
+            if (candle != null) item { ErevBanner(JewishDays.restName(today.plusDays(1)) ?: "שבת", candle) }
             if (daily.isNotEmpty()) item { ProgressCard(done, daily.size) }
             if (Store.habits.isEmpty()) item { EmptyState(add) }
             items(todays, key = { it.id }) { h ->
@@ -189,7 +201,7 @@ fun TodayScreen(today: LocalDate, open: (String) -> Unit, add: () -> Unit, reord
             if (others.isNotEmpty()) {
                 item {
                     Text(
-                        if (rest != null) "היום יום מנוחה" else "לא היום",
+                        "לא היום",
                         color = Gray, fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp),
                     )
                 }
@@ -222,13 +234,45 @@ fun Header(today: LocalDate, reorder: (() -> Unit)?) {
     }
 }
 
+/** Shown on Shabbat/chag: the app is closed until it goes out. */
 @Composable
-fun RestBanner(rest: String) {
-    val title = if (rest == "שבת") "שבת שלום 🕯️" else "$rest – חג שמח 🕯️"
+fun ShabbatScreen(rest: JewishDays.RestWindow) {
+    Column(
+        Modifier.fillMaxSize().background(GoldLight).padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text("🕯️🕯️", fontSize = 56.sp)
+        Spacer(Modifier.height(16.dp))
+        Text(
+            rest.greeting.removeSuffix(" 🕯️"), fontSize = 32.sp, fontWeight = FontWeight.Bold,
+            color = Gold, textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(12.dp))
+        Text("צעד סגורה עכשיו", fontSize = 18.sp, color = Gold)
+        Text("ותיפתח לבד ${rest.opensAt}", fontSize = 18.sp, color = Gold, textAlign = TextAlign.Center)
+        Spacer(Modifier.height(20.dp))
+        Text("הרצפים שלך שמורים 💙", fontSize = 16.sp, color = Gold)
+    }
+}
+
+@Composable
+fun ErevBanner(name: String, candle: java.time.Instant) {
+    val what = if (name == "שבת") "השבת נכנסת" else "$name נכנס"
     Card(colors = CardDefaults.cardColors(containerColor = GoldLight)) {
         Column(Modifier.padding(16.dp)) {
-            Text(title, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Gold)
-            Text("היום יום מנוחה – הרצפים שלך שמורים ולא יישברו.", color = Gold, fontSize = 14.sp)
+            Text("🕯️ $what היום ב־${JewishDays.hhmm(candle)}", fontWeight = FontWeight.Bold, fontSize = 17.sp, color = Gold)
+            Text("מה שלא תספיק היום לא ישבור את הרצף, ומה שכן תעשה – בונוס.", color = Gold, fontSize = 14.sp)
+        }
+    }
+}
+
+@Composable
+fun MotzaeiBanner(rest: String) {
+    Card(colors = CardDefaults.cardColors(containerColor = GoldLight)) {
+        Column(Modifier.padding(16.dp)) {
+            Text(if (rest == "שבת") "שבוע טוב! 🌟" else "מועדים לשמחה! 🌟", fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Gold)
+            Text("מה שתסמן הערב הוא בונוס לרצף.", color = Gold, fontSize = 14.sp)
         }
     }
 }
@@ -287,6 +331,7 @@ fun HabitCard(h: Habit, today: LocalDate, active: Boolean, onOpen: () -> Unit) {
         h.isWeekly && !active -> "✓ השלמת את השבוע · 🔥 $streak שבועות"
         h.isWeekly -> "${countText}השבוע: ${h.weekCount(week)} מתוך ${h.weekGoal(week)} · 🔥 $streak שבועות"
         !active -> "לא מתוכנן להיום · 🔥 $streak"
+        JewishDays.isRestDay(today) -> "${countText}בונוס 🌟 · 🔥 $streak"
         h.type == HabitType.QUIT && slipped -> "נפלת היום – מחר מתחילים מחדש 💙"
         h.type == HabitType.QUIT -> "💪 $streak ימים ברצף בלי"
         h.type == HabitType.COUNT -> "$c מתוך ${h.target} · 🔥 $streak"
@@ -464,9 +509,9 @@ fun MonthCalendar(h: Habit, month: YearMonth, today: LocalDate, onPrev: () -> Un
 fun DayCell(h: Habit, date: LocalDate, today: LocalDate) {
     val (bg, fg) = when {
         date.isAfter(today) -> Color.Transparent to Line
-        JewishDays.isRestDay(date) -> GoldLight to Gold
-        date.isBefore(h.createdDate()) -> Color.Transparent to Gray
+        date.isBefore(h.createdDate()) -> (if (JewishDays.isRestDay(date)) GoldLight else Color.Transparent) to Gray
         h.done(date) && (h.required(date) || h.type != HabitType.QUIT) -> Blue to Color.White
+        JewishDays.isRestDay(date) -> GoldLight to Gold
         !h.required(date) -> OffBg to Gray
         date == today -> Color.White to Blue
         h.type == HabitType.COUNT && Store.count(h, date) > 0 -> LightBlue to DarkBlue
@@ -588,7 +633,10 @@ fun EditScreen(existing: Habit?, onDone: () -> Unit, onDeleted: () -> Unit, onRe
                 DayChip("ש", selected = false, rest = true) {}
             }
         }
-        Text("🕯️ שבת וחגים הם ימי מנוחה – הרצף לא נשבר בהם", fontSize = 13.sp, color = Gold)
+        Text(
+            "🕯️ שבת וחגים הם ימי מנוחה – הרצף לא נשבר בהם, וגם לא ביום שישי ובערב חג.",
+            fontSize = 13.sp, color = Gold,
+        )
 
         Label("תזכורת")
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -603,7 +651,7 @@ fun EditScreen(existing: Habit?, onDone: () -> Unit, onDeleted: () -> Unit, onRe
         }
         if (reminder != null) {
             Text(
-                "ביום שישי ובערב חג התזכורת תגיע עד 13:00, ובשבת ובחג לא יגיעו תזכורות.",
+                "ביום שישי ובערב חג התזכורת תגיע לכל המאוחר שעה לפני כניסת השבת/החג, ובשבת ובחג לא יגיעו תזכורות.",
                 fontSize = 13.sp, color = Gray,
             )
         }

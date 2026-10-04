@@ -40,7 +40,7 @@ class TzaadWidget : AppWidgetProvider() {
 
         /** What the widget lists. "Quit" habits stay out so a stray tap can't mark a slip. */
         fun widgetHabits(today: LocalDate): List<Habit> =
-            Store.habits.toList().filter { it.type != HabitType.QUIT && it.activeOn(today) }
+            Store.habits.toList().filter { it.type != HabitType.QUIT && it.markableOn(today) }
 
         fun refresh(ctx: Context) {
             val mgr = AppWidgetManager.getInstance(ctx)
@@ -71,12 +71,12 @@ class TzaadWidget : AppWidgetProvider() {
             Store.load(ctx)
             val v = RemoteViews(ctx.packageName, R.layout.widget)
             val today = LocalDate.now()
-            val rest = JewishDays.restName(today)
+            val rest = JewishDays.currentRest()
             val list = widgetHabits(today)
 
             v.setOnClickPendingIntent(R.id.header, openApp(ctx))
             // Today's score counts the daily habits; weekly ones have their own weekly goal.
-            val daily = list.filter { !it.isWeekly }
+            val daily = if (rest != null) emptyList() else list.filter { it.scheduled(today) }
             val doneCount = daily.count { it.done(today) }
             v.setTextViewText(
                 R.id.progress,
@@ -88,8 +88,7 @@ class TzaadWidget : AppWidgetProvider() {
             )
 
             val msg = when {
-                rest == "שבת" -> "שבת שלום 🕯️"
-                rest != null -> "$rest – חג שמח 🕯️"
+                rest != null -> "${rest.greeting}\nנפתח ${rest.opensAt}"
                 Store.habits.isEmpty() -> "פתח את האפליקציה והוסף הרגל"
                 list.isEmpty() -> "אין הרגלים להיום 😎"
                 else -> null
@@ -132,7 +131,7 @@ class WidgetListService : RemoteViewsService() {
             Store.load(ctx)
             today = LocalDate.now()
             items = try {
-                if (JewishDays.isRestDay(today)) emptyList() else TzaadWidget.widgetHabits(today)
+                if (JewishDays.restNow()) emptyList() else TzaadWidget.widgetHabits(today)
             } catch (e: Exception) {
                 emptyList()
             }
