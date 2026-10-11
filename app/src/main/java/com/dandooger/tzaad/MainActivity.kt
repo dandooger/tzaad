@@ -69,6 +69,7 @@ sealed interface Screen {
     data class Detail(val id: String) : Screen
     data class Edit(val id: String?) : Screen
     data object Reorder : Screen
+    data object Categories : Screen
 }
 
 class MainActivity : ComponentActivity() {
@@ -142,7 +143,12 @@ fun App(onReminderSet: () -> Unit) {
 
             Screen.Reorder -> {
                 BackHandler { screen = Screen.Today }
-                ReorderScreen(back = { screen = Screen.Today })
+                ReorderScreen(back = { screen = Screen.Today }, categories = { screen = Screen.Categories })
+            }
+
+            Screen.Categories -> {
+                BackHandler { screen = Screen.Reorder }
+                CategoriesScreen(back = { screen = Screen.Reorder })
             }
 
             is Screen.Detail -> {
@@ -178,7 +184,7 @@ fun TodayScreen(today: LocalDate, open: (String) -> Unit, add: () -> Unit, reord
     val todays = Store.habits.filter { it.markableOn(today) }
     val others = Store.habits.filter { !it.markableOn(today) }
     // Today's score counts the daily habits; weekly ones have their own weekly goal.
-    val daily = todays.filter { it.scheduled(today) }
+    val daily = todays.filter { it.scheduled(today) || (it.isWeekly && it.available(today)) }
     val done = daily.count { it.done(today) }
     val candle = JewishDays.candleToday(today)
     val ctx = LocalContext.current
@@ -214,8 +220,13 @@ fun TodayScreen(today: LocalDate, open: (String) -> Unit, add: () -> Unit, reord
             if (candle != null) item { ErevBanner(JewishDays.restName(today.plusDays(1)) ?: "שבת", candle) }
             if (daily.isNotEmpty()) item { ProgressCard(done, daily.size) }
             if (Store.habits.isEmpty()) item { EmptyState(add) }
-            items(todays, key = { it.id }) { h ->
-                HabitCard(h, today, active = true, onOpen = { open(h.id) }, onTaskDone = { taskDone(h) })
+            val groups = Store.grouped(todays)
+            val showTitles = groups.any { it.first != null }
+            for ((cat, hs) in groups) {
+                if (showTitles) item(key = "cat-" + (cat?.id ?: "none")) { SectionTitle(cat?.name ?: "בלי קטגוריה") }
+                items(hs, key = { it.id }) { h ->
+                    HabitCard(h, today, active = true, onOpen = { open(h.id) }, onTaskDone = { taskDone(h) })
+                }
             }
             if (others.isNotEmpty()) {
                 item {
@@ -593,6 +604,8 @@ fun EditScreen(existing: Habit?, onDone: () -> Unit, onDeleted: () -> Unit, onRe
     var weekly by remember { mutableStateOf((existing?.perWeek ?: 0) > 0) }
     var perWeek by remember { mutableStateOf(existing?.perWeek?.takeIf { it > 0 } ?: 2) }
     var note by remember { mutableStateOf(existing?.note ?: "") }
+    var category by remember { mutableStateOf(existing?.category ?: "") }
+    var addingCategory by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val isTask = type == HabitType.ONCE || type == HabitType.HOMEWORK
     val isHomework = type == HabitType.HOMEWORK
@@ -600,6 +613,9 @@ fun EditScreen(existing: Habit?, onDone: () -> Unit, onDeleted: () -> Unit, onRe
     fun pickType(t: HabitType) {
         type = t
         if (t == HabitType.HOMEWORK && emoji == "⭐") emoji = "📚"
+        if (t == HabitType.HOMEWORK && category.isEmpty()) {
+            Store.categories.find { it.name.contains("שיעורי בית") }?.let { category = it.id }
+        }
         error = null
     }
     var confirmDelete by remember { mutableStateOf(false) }
@@ -662,6 +678,13 @@ fun EditScreen(existing: Habit?, onDone: () -> Unit, onDeleted: () -> Unit, onRe
                 modifier = Modifier.fillMaxWidth(),
             )
             Text("בווידג'ט יופיע רק שם המקצוע.", fontSize = 13.sp, color = Gray)
+        }
+
+        Label("קטגוריה")
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            CategoryChip("בלי", category.isEmpty()) { category = "" }
+            Store.categories.forEach { c -> CategoryChip(c.name, category == c.id) { category = c.id } }
+            CategoryChip("➕ חדשה", false) { addingCategory = true }
         }
 
         Label("בחר אמוג'י")
@@ -755,6 +778,7 @@ fun EditScreen(existing: Habit?, onDone: () -> Unit, onDeleted: () -> Unit, onRe
                                 reminder = reminder,
                                 perWeek = if (isWeekly) perWeek else 0,
                                 note = if (isHomework) note.trim() else "",
+                                category = category,
                             ),
                         )
                         if (reminder != null) onReminderSet()
@@ -771,6 +795,27 @@ fun EditScreen(existing: Habit?, onDone: () -> Unit, onDeleted: () -> Unit, onRe
             }
         }
         Spacer(Modifier.height(24.dp))
+    }
+
+    if (addingCategory) {
+        var newName by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { addingCategory = false },
+            title = { Text("קטגוריה חדשה") },
+            text = {
+                OutlinedTextField(
+                    value = newName, onValueChange = { newName = it }, singleLine = true,
+                    placeholder = { Text("למשל: 🏠 בבית") },
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    if (newName.isNotBlank()) category = Store.addCategory(ctx, newName).id
+                    addingCategory = false
+                }) { Text("הוסף") }
+            },
+            dismissButton = { TextButton(onClick = { addingCategory = false }) { Text("ביטול") } },
+        )
     }
 
     if (confirmDelete && existing != null) {
@@ -793,6 +838,18 @@ fun EditScreen(existing: Habit?, onDone: () -> Unit, onDeleted: () -> Unit, onRe
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("ביטול") } },
         )
     }
+}
+
+@Composable
+fun CategoryChip(text: String, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(20.dp))
+            .background(if (selected) Blue else Color.White)
+            .border(1.dp, if (selected) Blue else Line, RoundedCornerShape(20.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 9.dp),
+    ) { Text(text, color = if (selected) Color.White else Color.Black, fontSize = 15.sp) }
 }
 
 @Composable

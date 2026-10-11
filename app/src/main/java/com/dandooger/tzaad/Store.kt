@@ -26,7 +26,14 @@ data class Habit(
     val perWeek: Int = 0,
     // Homework: what needs to be done ("עד עמוד 25"). Shown in the app, not in the widget.
     val note: String = "",
+    // Category id, or "" for none.
+    val category: String = "",
 )
+
+/** A group of habits, chosen and ordered by Daniel (in the app and the widget). */
+data class Category(val id: String = UUID.randomUUID().toString(), val name: String)
+
+private val DEFAULT_CATEGORIES = listOf("📚 שיעורי בית", "💪 אימונים", "🙏 אמונה בה'")
 
 /** All data lives on the phone, in SharedPreferences as JSON. */
 object Store {
@@ -34,6 +41,7 @@ object Store {
     val version = mutableStateOf(0)
 
     val habits = mutableListOf<Habit>()
+    val categories = mutableListOf<Category>()
     // date -> (habit id -> count). For QUIT habits, 1 means "slipped".
     private val log = mutableMapOf<String, MutableMap<String, Int>>()
     private var loaded = false
@@ -59,7 +67,17 @@ object Store {
                 created = o.getString("created"),
                 perWeek = o.optInt("perWeek", 0),
                 note = o.optString("note", ""),
+                category = o.optString("category", ""),
             )
+        }
+        if (p.contains("categories")) {
+            val ca = JSONArray(p.getString("categories", "[]"))
+            for (i in 0 until ca.length()) {
+                val o = ca.getJSONObject(i)
+                categories += Category(o.getString("id"), o.getString("name"))
+            }
+        } else {
+            categories += DEFAULT_CATEGORIES.map { Category(name = it) }
         }
         val lo = JSONObject(p.getString("log", "{}"))
         for (date in lo.keys()) {
@@ -67,6 +85,7 @@ object Store {
             log[date] = d.keys().asSequence().associateWith { d.getInt(it) }.toMutableMap()
         }
         loaded = true
+        if (!p.contains("categories")) save(ctx)
     }
 
     private fun save(ctx: Context) {
@@ -83,11 +102,18 @@ object Store {
                 put("created", h.created)
                 put("perWeek", h.perWeek)
                 put("note", h.note)
+                put("category", h.category)
             })
         }
         val lo = JSONObject()
         for ((date, m) in log) lo.put(date, JSONObject(m as Map<*, *>))
-        prefs(ctx).edit().putString("habits", arr.toString()).putString("log", lo.toString()).apply()
+        val ca = JSONArray()
+        for (c in categories) ca.put(JSONObject().put("id", c.id).put("name", c.name))
+        prefs(ctx).edit()
+            .putString("habits", arr.toString())
+            .putString("log", lo.toString())
+            .putString("categories", ca.toString())
+            .apply()
     }
 
     private fun changed(ctx: Context) {
@@ -144,13 +170,58 @@ object Store {
         changed(ctx)
     }
 
-    /** New order from the drag screen – the app list and the widget follow it. */
-    fun reorder(ctx: Context, ids: List<String>) {
+    /** New order for some habits (one category) – they swap among their own places. */
+    fun reorderWithin(ctx: Context, ids: List<String>) {
+        val set = ids.toSet()
+        val slots = habits.indices.filter { habits[it].id in set }
         val byId = habits.associateBy { it.id }
         val sorted = ids.mapNotNull { byId[it] }
-        habits.clear()
-        habits += sorted
+        if (sorted.size != slots.size) return
+        slots.forEachIndexed { i, slot -> habits[slot] = sorted[i] }
         changed(ctx)
+    }
+
+    // ── Categories ──
+
+    fun category(id: String) = categories.find { it.id == id }
+
+    fun addCategory(ctx: Context, name: String): Category {
+        val c = Category(name = name.trim())
+        categories += c
+        changed(ctx)
+        return c
+    }
+
+    fun renameCategory(ctx: Context, id: String, name: String) {
+        val i = categories.indexOfFirst { it.id == id }
+        if (i < 0) return
+        categories[i] = categories[i].copy(name = name.trim())
+        changed(ctx)
+    }
+
+    /** Deleting a category keeps its habits – they just become "בלי קטגוריה". */
+    fun deleteCategory(ctx: Context, id: String) {
+        categories.removeAll { it.id == id }
+        habits.replaceAll { if (it.category == id) it.copy(category = "") else it }
+        changed(ctx)
+    }
+
+    fun reorderCategories(ctx: Context, ids: List<String>) {
+        val byId = categories.associateBy { it.id }
+        val sorted = ids.mapNotNull { byId[it] }
+        if (sorted.size != categories.size) return
+        categories.clear()
+        categories += sorted
+        changed(ctx)
+    }
+
+    /** Habits grouped by category, in Daniel's order; habits without one come last (null). */
+    fun grouped(list: List<Habit>): List<Pair<Category?, List<Habit>>> {
+        val known = categories.map { it.id }.toSet()
+        val groups = categories.map { c -> c to list.filter { it.category == c.id } }
+            .filter { it.second.isNotEmpty() }
+        val rest = list.filter { it.category !in known }
+        return if (rest.isEmpty()) groups else groups + (null to rest)
     }
 
     fun deleteHabit(ctx: Context, id: String) {

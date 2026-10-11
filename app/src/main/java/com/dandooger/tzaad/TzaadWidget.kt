@@ -76,7 +76,8 @@ class TzaadWidget : AppWidgetProvider() {
 
             v.setOnClickPendingIntent(R.id.header, openApp(ctx))
             // Today's score counts the daily habits; weekly ones have their own weekly goal.
-            val daily = if (rest != null) emptyList() else list.filter { it.scheduled(today) }
+            val daily = if (rest != null) emptyList()
+            else list.filter { it.scheduled(today) || (it.isWeekly && it.available(today)) }
             val doneCount = daily.count { it.done(today) }
             v.setTextViewText(
                 R.id.progress,
@@ -121,7 +122,10 @@ class WidgetListService : RemoteViewsService() {
     override fun onGetViewFactory(intent: Intent): RemoteViewsFactory = Factory(applicationContext)
 
     private class Factory(private val ctx: Context) : RemoteViewsFactory {
-        private var items = listOf<Habit>()
+        // A row is a category title (habit == null) or a habit.
+        private class Row(val title: String?, val habit: Habit?)
+
+        private var items = listOf<Row>()
         private var today = LocalDate.now()
 
         override fun onCreate() {}
@@ -131,7 +135,15 @@ class WidgetListService : RemoteViewsService() {
             Store.load(ctx)
             today = LocalDate.now()
             items = try {
-                if (JewishDays.restNow()) emptyList() else TzaadWidget.widgetHabits(today)
+                if (JewishDays.restNow()) emptyList()
+                else {
+                    val groups = Store.grouped(TzaadWidget.widgetHabits(today))
+                    val showTitles = groups.any { it.first != null }
+                    groups.flatMap { (cat, hs) ->
+                        (if (showTitles) listOf(Row(cat?.name ?: "בלי קטגוריה", null)) else emptyList()) +
+                            hs.map { Row(null, it) }
+                    }
+                }
             } catch (e: Exception) {
                 emptyList()
             }
@@ -140,8 +152,14 @@ class WidgetListService : RemoteViewsService() {
         override fun getCount() = items.size
 
         override fun getViewAt(position: Int): RemoteViews {
+            val row = items.getOrNull(position) ?: return RemoteViews(ctx.packageName, R.layout.widget_row)
+            if (row.habit == null) {
+                return RemoteViews(ctx.packageName, R.layout.widget_header).apply {
+                    setTextViewText(R.id.header_text, row.title ?: "")
+                }
+            }
             val v = RemoteViews(ctx.packageName, R.layout.widget_row)
-            val h = items.getOrNull(position) ?: return v
+            val h = row.habit
             val c = Store.count(h, today)
             val done = h.done(today)
             val week = weekStart(today)
@@ -177,8 +195,11 @@ class WidgetListService : RemoteViewsService() {
         }
 
         override fun getLoadingView(): RemoteViews? = null
-        override fun getViewTypeCount() = 1
-        override fun getItemId(position: Int) = items.getOrNull(position)?.id?.hashCode()?.toLong() ?: position.toLong()
+        override fun getViewTypeCount() = 2
+        override fun getItemId(position: Int): Long {
+            val row = items.getOrNull(position) ?: return position.toLong()
+            return (row.habit?.id ?: ("title:" + row.title)).hashCode().toLong()
+        }
         override fun hasStableIds() = true
 
         companion object {
