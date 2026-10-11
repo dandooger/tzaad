@@ -38,9 +38,9 @@ class TzaadWidget : AppWidgetProvider() {
     companion object {
         const val ACTION_TAP = "com.dandooger.tzaad.TAP"
 
-        /** What the widget lists. "Quit" habits stay out so a stray tap can't mark a slip. */
+        /** What the widget lists (only titles – homework details stay in the app). */
         fun widgetHabits(today: LocalDate): List<Habit> =
-            Store.habits.toList().filter { it.type != HabitType.QUIT && it.markableOn(today) }
+            Store.habits.toList().filter { it.markableOn(today) }
 
         fun refresh(ctx: Context) {
             val mgr = AppWidgetManager.getInstance(ctx)
@@ -145,16 +145,28 @@ class WidgetListService : RemoteViewsService() {
             val c = Store.count(h, today)
             val done = h.done(today)
             val week = weekStart(today)
+            val slipped = h.type == HabitType.QUIT && c > 0
             v.setTextViewText(R.id.name, "${h.emoji} ${h.name}")
             v.setTextViewText(
                 R.id.prog,
                 when {
+                    slipped -> "נפסלתי היום"
+                    h.type == HabitType.QUIT -> "💪 ${h.streak(today)}"
+                    h.type == HabitType.SUCCEED -> "🏆 ${h.streak(today)}"
                     h.type == HabitType.COUNT -> "$c/${h.target}"
                     h.isWeekly -> "השבוע ${h.weekCount(week)}/${h.weekGoal(week)}"
                     else -> ""
                 },
             )
-            v.setTextViewText(R.id.btn, if (done) "✓" else if (h.type == HabitType.COUNT) "+" else "")
+            v.setTextViewText(
+                R.id.btn,
+                when {
+                    slipped -> "✗"
+                    done -> "✓"
+                    h.type == HabitType.COUNT -> "+"
+                    else -> ""
+                },
+            )
             v.setTextColor(R.id.btn, if (done) BLUE else WHITE)
             v.setInt(R.id.btn, "setBackgroundResource", if (done) R.drawable.btn_done else R.drawable.btn_todo)
             v.setOnClickFillInIntent(

@@ -42,6 +42,7 @@ import java.time.LocalTime
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlinx.coroutines.launch
 
 val Blue = Color(0xFF1E6FD9)
 val DarkBlue = Color(0xFF0C447C)
@@ -133,7 +134,8 @@ fun App(onReminderSet: () -> Unit) {
         } else when (val s = screen) {
             Screen.Today -> TodayScreen(
                 today,
-                open = { screen = Screen.Detail(it) },
+                // Tasks have no streak or calendar – open them straight for editing.
+                open = { screen = if (Store.habit(it)?.isTask == true) Screen.Edit(it) else Screen.Detail(it) },
                 add = { screen = Screen.Edit(null) },
                 reorder = { screen = Screen.Reorder },
             )
@@ -151,7 +153,10 @@ fun App(onReminderSet: () -> Unit) {
             }
 
             is Screen.Edit -> {
-                val back = { screen = if (s.id != null) Screen.Detail(s.id) else Screen.Today }
+                val back = {
+                    val h = s.id?.let { Store.habit(it) }
+                    screen = if (h != null && !h.isTask) Screen.Detail(h.id) else Screen.Today
+                }
                 BackHandler { back() }
                 EditScreen(
                     existing = s.id?.let { Store.habit(it) },
@@ -176,9 +181,23 @@ fun TodayScreen(today: LocalDate, open: (String) -> Unit, add: () -> Unit, reord
     val daily = todays.filter { it.scheduled(today) }
     val done = daily.count { it.done(today) }
     val candle = JewishDays.candleToday(today)
+    val ctx = LocalContext.current
+    val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    // A one-time task marked done disappears – with a few seconds to undo.
+    val taskDone: (Habit) -> Unit = { h ->
+        val index = Store.habits.indexOfFirst { it.id == h.id }
+        Store.tap(ctx, h, today)
+        scope.launch {
+            snackbar.currentSnackbarData?.dismiss()
+            val r = snackbar.showSnackbar("✓ ${h.name} – בוצע", actionLabel = "בטל", duration = SnackbarDuration.Short)
+            if (r == SnackbarResult.ActionPerformed) Store.restore(ctx, h, index)
+        }
+    }
 
     Scaffold(
         containerColor = Bg,
+        snackbarHost = { SnackbarHost(snackbar) },
         floatingActionButton = {
             FloatingActionButton(onClick = add, containerColor = Blue, contentColor = Color.White) {
                 Icon(Icons.Filled.Add, contentDescription = "הוסף הרגל")
@@ -196,7 +215,7 @@ fun TodayScreen(today: LocalDate, open: (String) -> Unit, add: () -> Unit, reord
             if (daily.isNotEmpty()) item { ProgressCard(done, daily.size) }
             if (Store.habits.isEmpty()) item { EmptyState(add) }
             items(todays, key = { it.id }) { h ->
-                HabitCard(h, today, active = true, onOpen = { open(h.id) })
+                HabitCard(h, today, active = true, onOpen = { open(h.id) }, onTaskDone = { taskDone(h) })
             }
             if (others.isNotEmpty()) {
                 item {
@@ -313,7 +332,7 @@ fun EmptyState(add: () -> Unit) {
 }
 
 @Composable
-fun HabitCard(h: Habit, today: LocalDate, active: Boolean, onOpen: () -> Unit) {
+fun HabitCard(h: Habit, today: LocalDate, active: Boolean, onOpen: () -> Unit, onTaskDone: () -> Unit = {}) {
     Store.version.value
     val ctx = LocalContext.current
     val c = Store.count(h, today)
@@ -327,13 +346,17 @@ fun HabitCard(h: Habit, today: LocalDate, active: Boolean, onOpen: () -> Unit) {
     val week = weekStart(today)
     val countText = if (h.type == HabitType.COUNT) "$c מתוך ${h.target} · " else ""
     val subtitle = when {
+        h.type == HabitType.HOMEWORK -> h.note.ifBlank { "שיעורי בית" }
+        h.type == HabitType.ONCE -> "חד פעמי – נמחק כשמסמנים וי"
         !active && JewishDays.isRestDay(today) -> "🔥 רצף: $streak – שמור"
         h.isWeekly && !active -> "✓ השלמת את השבוע · 🔥 $streak שבועות"
         h.isWeekly -> "${countText}השבוע: ${h.weekCount(week)} מתוך ${h.weekGoal(week)} · 🔥 $streak שבועות"
         !active -> "לא מתוכנן להיום · 🔥 $streak"
         JewishDays.isRestDay(today) -> "${countText}בונוס 🌟 · 🔥 $streak"
-        h.type == HabitType.QUIT && slipped -> "נפלת היום – מחר מתחילים מחדש 💙"
+        h.type == HabitType.QUIT && slipped -> "נפסלת היום – מחר מתחילים מחדש 💙"
         h.type == HabitType.QUIT -> "💪 $streak ימים ברצף בלי"
+        h.type == HabitType.SUCCEED && done -> "🏆 הצלחת היום! · 🔥 $streak"
+        h.type == HabitType.SUCCEED -> "🏆 $streak ימים ברצף שהצלחתי"
         h.type == HabitType.COUNT -> "$c מתוך ${h.target} · 🔥 $streak"
         streak == 0 -> "🔥 בוא נתחיל רצף"
         else -> "🔥 רצף: $streak ימים"
@@ -359,7 +382,10 @@ fun HabitCard(h: Habit, today: LocalDate, active: Boolean, onOpen: () -> Unit) {
                 h.name, fontSize = 17.sp, fontWeight = FontWeight.Bold,
                 color = if (active) Color.Black else Gray,
             )
-            Text(subtitle, fontSize = 13.sp, color = if (slipped) MissedFg else Gray)
+            Text(
+                subtitle, fontSize = 13.sp, color = if (slipped) MissedFg else Gray,
+                maxLines = 3, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
         }
         if (active) {
             when (h.type) {
@@ -376,7 +402,12 @@ fun HabitCard(h: Habit, today: LocalDate, active: Boolean, onOpen: () -> Unit) {
                 }
                 HabitType.QUIT -> {
                     if (slipped) TextButton(onClick = { Store.tap(ctx, h, today) }) { Text("בטל") }
-                    else OutlinedButton(onClick = { Store.tap(ctx, h, today) }) { Text("נפלתי", color = MissedFg) }
+                    else OutlinedButton(onClick = { Store.tap(ctx, h, today) }) { Text("נפסלתי", color = MissedFg) }
+                }
+                HabitType.ONCE, HabitType.HOMEWORK -> TapCircle(false, "", onTaskDone)
+                HabitType.SUCCEED -> {
+                    if (done) TextButton(onClick = { Store.tap(ctx, h, today) }) { Text("בטל") }
+                    else OutlinedButton(onClick = { Store.tap(ctx, h, today) }) { Text("🏆 הצלחתי", color = Blue) }
                 }
             }
         }
@@ -561,8 +592,16 @@ fun EditScreen(existing: Habit?, onDone: () -> Unit, onDeleted: () -> Unit, onRe
     var reminder by remember { mutableStateOf(existing?.reminder) }
     var weekly by remember { mutableStateOf((existing?.perWeek ?: 0) > 0) }
     var perWeek by remember { mutableStateOf(existing?.perWeek?.takeIf { it > 0 } ?: 2) }
+    var note by remember { mutableStateOf(existing?.note ?: "") }
     var error by remember { mutableStateOf<String?>(null) }
-    val isWeekly = weekly && type != HabitType.QUIT
+    val isTask = type == HabitType.ONCE || type == HabitType.HOMEWORK
+    val isHomework = type == HabitType.HOMEWORK
+    val isWeekly = weekly && type != HabitType.QUIT && !isTask
+    fun pickType(t: HabitType) {
+        type = t
+        if (t == HabitType.HOMEWORK && emoji == "⭐") emoji = "📚"
+        error = null
+    }
     var confirmDelete by remember { mutableStateOf(false) }
 
     Column(
@@ -571,17 +610,59 @@ fun EditScreen(existing: Habit?, onDone: () -> Unit, onDeleted: () -> Unit, onRe
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onDone) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "חזרה") }
-            Text(if (existing == null) "הרגל חדש" else "עריכת הרגל", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            Text(
+                when {
+                    isHomework -> "שיעורי בית"
+                    isTask -> "משימה חד פעמית"
+                    existing == null -> "הרגל חדש"
+                    else -> "עריכת הרגל"
+                },
+                fontSize = 22.sp, fontWeight = FontWeight.Bold,
+            )
         }
 
-        Label("איך קוראים להרגל?")
+        Label("מה מוסיפים?")
+        Choice("✓  הרגל רגיל – מסמנים וי", "למשל: לקרוא 20 דקות", type == HabitType.CHECK) { pickType(HabitType.CHECK) }
+        Choice("🔢  הרגל עם מספר", "למשל: 8 כוסות מים ביום", type == HabitType.COUNT) { pickType(HabitType.COUNT) }
+        Choice("🚫  להפסיק משהו", "כל יום שלא נפסלת = הצלחה. למשל: בלי ממתקים", type == HabitType.QUIT) { pickType(HabitType.QUIT) }
+        Choice("🏆  להצליח משהו", "לוחצים \"הצלחתי\" כשהצלחת. למשל: לא לאחר לבית ספר", type == HabitType.SUCCEED) { pickType(HabitType.SUCCEED) }
+        Choice("☑️  חד פעמי", "נמחק אחרי שמסמנים וי. למשל: לקנות מתנה לאמא", type == HabitType.ONCE) { pickType(HabitType.ONCE) }
+        Choice("📚  שיעורי בית", "מקצוע + מה צריך לעשות. נמחק כשמסיימים", isHomework) { pickType(HabitType.HOMEWORK) }
+
+        Label(
+            when {
+                isHomework -> "באיזה מקצוע?"
+                isTask -> "מה צריך לעשות?"
+                else -> "איך קוראים להרגל?"
+            }
+        )
         OutlinedTextField(
             value = name,
             onValueChange = { name = it; error = null },
-            placeholder = { Text("לשתות מים") },
+            placeholder = {
+                Text(
+                    when {
+                        isHomework -> "מתמטיקה"
+                        isTask -> "לקנות מתנה לאמא"
+                        else -> "לשתות מים"
+                    }
+                )
+            },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
+
+        if (isHomework) {
+            Label("מה השיעורי בית?")
+            OutlinedTextField(
+                value = note,
+                onValueChange = { note = it },
+                placeholder = { Text("עד עמוד 25, או: עבודה במחשב שיעור 3") },
+                minLines = 3,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text("בווידג'ט יופיע רק שם המקצוע.", fontSize = 13.sp, color = Gray)
+        }
 
         Label("בחר אמוג'י")
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -598,11 +679,6 @@ fun EditScreen(existing: Habit?, onDone: () -> Unit, onDeleted: () -> Unit, onRe
             }
         }
 
-        Label("איזה סוג הרגל?")
-        Choice("✓  רגיל – מסמנים וי", "למשל: לקרוא 20 דקות", type == HabitType.CHECK) { type = HabitType.CHECK }
-        Choice("🔢  עם מספר", "למשל: 8 כוסות מים ביום", type == HabitType.COUNT) { type = HabitType.COUNT }
-        Choice("🚫  להפסיק משהו", "הצלחה = לא עשיתי. למשל: בלי ממתקים", type == HabitType.QUIT) { type = HabitType.QUIT }
-
         if (type == HabitType.COUNT) {
             Label("כמה פעמים ביום? גלול למספר")
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -610,13 +686,15 @@ fun EditScreen(existing: Habit?, onDone: () -> Unit, onDeleted: () -> Unit, onRe
             }
         }
 
-        if (type != HabitType.QUIT) {
+        if (type != HabitType.QUIT && !isTask) {
             Label("באיזו תדירות?")
             Choice("📅  בימים קבועים", "בוחרים באילו ימים בשבוע", !weekly) { weekly = false; error = null }
             Choice("🗓️  כמה פעמים בשבוע", "באיזה יום שבא לך. למשל: ריצה פעמיים בשבוע", weekly) { weekly = true; error = null }
         }
 
-        if (isWeekly) {
+        if (isTask) {
+            // One-time tasks have no days and no streak.
+        } else if (isWeekly) {
             Label("כמה פעמים בשבוע? גלול למספר")
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                 NumberWheel(perWeek, 1, 6) { perWeek = it }
@@ -633,10 +711,12 @@ fun EditScreen(existing: Habit?, onDone: () -> Unit, onDeleted: () -> Unit, onRe
                 DayChip("ש", selected = false, rest = true) {}
             }
         }
-        Text(
-            "🕯️ שבת וחגים הם ימי מנוחה – הרצף לא נשבר בהם, וגם לא ביום שישי ובערב חג.",
-            fontSize = 13.sp, color = Gold,
-        )
+        if (!isTask) {
+            Text(
+                "🕯️ שבת וחגים הם ימי מנוחה – הרצף לא נשבר בהם, וגם לא ביום שישי ובערב חג.",
+                fontSize = 13.sp, color = Gold,
+            )
+        }
 
         Label("תזכורת")
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -662,8 +742,8 @@ fun EditScreen(existing: Habit?, onDone: () -> Unit, onDeleted: () -> Unit, onRe
         Button(
             onClick = {
                 when {
-                    name.isBlank() -> error = "צריך לתת שם להרגל"
-                    !isWeekly && days.isEmpty() -> error = "צריך לבחור לפחות יום אחד"
+                    name.isBlank() -> error = if (isHomework) "צריך לכתוב מקצוע" else "צריך לתת שם"
+                    !isTask && !isWeekly && days.isEmpty() -> error = "צריך לבחור לפחות יום אחד"
                     else -> {
                         val base = existing ?: Habit(name = "", emoji = "", type = type)
                         Store.saveHabit(
@@ -674,6 +754,7 @@ fun EditScreen(existing: Habit?, onDone: () -> Unit, onDeleted: () -> Unit, onRe
                                 days = if (days.isEmpty()) WEEK.toSet() else days,
                                 reminder = reminder,
                                 perWeek = if (isWeekly) perWeek else 0,
+                                note = if (isHomework) note.trim() else "",
                             ),
                         )
                         if (reminder != null) onReminderSet()
@@ -686,7 +767,7 @@ fun EditScreen(existing: Habit?, onDone: () -> Unit, onDeleted: () -> Unit, onRe
 
         if (existing != null) {
             TextButton(onClick = { confirmDelete = true }, modifier = Modifier.fillMaxWidth()) {
-                Text("מחק הרגל", color = MissedFg)
+                Text("מחק", color = MissedFg)
             }
         }
         Spacer(Modifier.height(24.dp))
@@ -695,8 +776,13 @@ fun EditScreen(existing: Habit?, onDone: () -> Unit, onDeleted: () -> Unit, onRe
     if (confirmDelete && existing != null) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
-            title = { Text("למחוק את ההרגל?") },
-            text = { Text("כל ההיסטוריה והרצף של \"${existing.name}\" יימחקו.") },
+            title = { Text("למחוק?") },
+            text = {
+                Text(
+                    if (existing.isTask) "\"${existing.name}\" יימחק."
+                    else "כל ההיסטוריה והרצף של \"${existing.name}\" יימחקו."
+                )
+            },
             confirmButton = {
                 TextButton(onClick = {
                     confirmDelete = false

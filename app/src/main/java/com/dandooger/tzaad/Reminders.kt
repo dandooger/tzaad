@@ -98,6 +98,9 @@ object Reminders {
             HabitType.CHECK -> "עוד לא סימנת היום"
             HabitType.COUNT -> "${Store.count(h, today)} מתוך ${h.target} – אל תשכח!"
             HabitType.QUIT -> "מחזיק מעמד? 💪 המשך כך"
+            HabitType.ONCE -> "עוד לא סימנת שסיימת"
+            HabitType.SUCCEED -> "הצלחת היום? 🏆"
+            HabitType.HOMEWORK -> h.note.ifBlank { "יש לך שיעורי בית" }
         }
         val b = Notification.Builder(ctx, CHANNEL)
             .setSmallIcon(R.drawable.ic_notif)
@@ -109,6 +112,8 @@ object Reminders {
             val label = when {
                 h.usesWheel() -> "הוסף"
                 h.type == HabitType.COUNT -> "+1"
+                h.isTask -> "✓ סיימתי"
+                h.type == HabitType.SUCCEED -> "🏆 הצלחתי"
                 else -> "✓ עשיתי"
             }
             val action = if (h.usesWheel()) AddActivity.pending(ctx, h.id, notifId)

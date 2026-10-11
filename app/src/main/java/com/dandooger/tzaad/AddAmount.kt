@@ -95,7 +95,86 @@ fun AmountDialog(h: Habit, onDismiss: () -> Unit) {
     )
 }
 
-/** Opens just the number-wheel window on top of the home screen (from the widget or a reminder). */
+/** From the widget: "quit" habits need a deliberate "נפסלתי", so a stray tap can't mark a slip. */
+@Composable
+fun QuitDialog(h: Habit, onDismiss: () -> Unit) {
+    val ctx = LocalContext.current
+    val today = LocalDate.now()
+    val slipped = Store.count(h, today) > 0
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("${h.emoji} ${h.name}") },
+        text = {
+            Text(
+                if (slipped) "סימנת שנפסלת היום. לבטל?"
+                else "💪 ${h.streak(today)} ימים ברצף בלי.\nנפסלת היום? זה בסדר, מחר מתחילים מחדש 💙",
+                fontSize = 16.sp,
+            )
+        },
+        confirmButton = {
+            Button(onClick = {
+                Store.tap(ctx, h, today)
+                onDismiss()
+            }) { Text(if (slipped) "בטל פסילה" else "נפסלתי", fontSize = 16.sp) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(if (slipped) "השאר" else "לא נפסלתי") } },
+    )
+}
+
+/** From the widget: "succeed" habits get a deliberate "הצלחתי". */
+@Composable
+fun SucceedDialog(h: Habit, onDismiss: () -> Unit) {
+    val ctx = LocalContext.current
+    val today = LocalDate.now()
+    val done = h.done(today)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("${h.emoji} ${h.name}") },
+        text = {
+            Text(
+                if (done) "סימנת שהצלחת היום. לבטל?"
+                else "🏆 ${h.streak(today)} ימים ברצף.
+הצלחת היום?",
+                fontSize = 16.sp,
+            )
+        },
+        confirmButton = {
+            Button(onClick = {
+                Store.tap(ctx, h, today)
+                onDismiss()
+            }) { Text(if (done) "בטל" else "🏆 הצלחתי", fontSize = 16.sp) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(if (done) "השאר" else "עוד לא") } },
+    )
+}
+
+/** From the widget: finishing a one-time task deletes it, so ask first (and show the homework). */
+@Composable
+fun TaskDoneDialog(h: Habit, onDismiss: () -> Unit) {
+    val ctx = LocalContext.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("${h.emoji} ${h.name}") },
+        text = {
+            Column {
+                if (h.note.isNotBlank()) {
+                    Text(h.note, fontSize = 16.sp)
+                    Spacer(Modifier.height(10.dp))
+                }
+                Text("סיימת? זה יימחק מהרשימה.", color = Gray, fontSize = 15.sp)
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                Store.tap(ctx, h, LocalDate.now())
+                onDismiss()
+            }) { Text("✓ סיימתי", fontSize = 16.sp) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("עוד לא") } },
+    )
+}
+
+/** A small window on top of the home screen (from the widget or a reminder). */
 class AddActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -109,14 +188,18 @@ class AddActivity : ComponentActivity() {
         }
         val notif = intent.getIntExtra("notif", 0)
         if (notif != 0) getSystemService(NotificationManager::class.java).cancel(notif)
-        if (!h.usesWheel()) {
-            // A tap on a small habit in the widget list: mark it and vanish – no window.
-            Store.tap(this, h, LocalDate.now())
-            finish()
-            @Suppress("DEPRECATION") overridePendingTransition(0, 0)
-            return
+        when {
+            h.type == HabitType.QUIT -> setContent { TzaadTheme { QuitDialog(h) { finish() } } }
+            h.type == HabitType.SUCCEED -> setContent { TzaadTheme { SucceedDialog(h) { finish() } } }
+            h.isTask -> setContent { TzaadTheme { TaskDoneDialog(h) { finish() } } }
+            h.usesWheel() -> setContent { TzaadTheme { AmountDialog(h) { finish() } } }
+            else -> {
+                // A tap on a small habit in the widget list: mark it and vanish – no window.
+                Store.tap(this, h, LocalDate.now())
+                finish()
+                @Suppress("DEPRECATION") overridePendingTransition(0, 0)
+            }
         }
-        setContent { TzaadTheme { AmountDialog(h) { finish() } } }
     }
 
     companion object {

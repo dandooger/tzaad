@@ -7,7 +7,9 @@ import org.json.JSONObject
 import java.time.LocalDate
 import java.util.UUID
 
-enum class HabitType { CHECK, COUNT, QUIT }
+// ONCE and HOMEWORK are one-time tasks: marking them done deletes them.
+// SUCCEED is the opposite of QUIT: marked deliberately with "הצלחתי" (with a confirm in the widget).
+enum class HabitType { CHECK, COUNT, QUIT, ONCE, HOMEWORK, SUCCEED }
 
 data class Habit(
     val id: String = UUID.randomUUID().toString(),
@@ -22,6 +24,8 @@ data class Habit(
     val created: String = LocalDate.now().toString(),
     // 0 = on the chosen days. 1–6 = that many times a week, any day (then `days` is unused).
     val perWeek: Int = 0,
+    // Homework: what needs to be done ("עד עמוד 25"). Shown in the app, not in the widget.
+    val note: String = "",
 )
 
 /** All data lives on the phone, in SharedPreferences as JSON. */
@@ -54,6 +58,7 @@ object Store {
                 reminder = if (o.has("reminder")) o.getInt("reminder") else null,
                 created = o.getString("created"),
                 perWeek = o.optInt("perWeek", 0),
+                note = o.optString("note", ""),
             )
         }
         val lo = JSONObject(p.getString("log", "{}"))
@@ -77,6 +82,7 @@ object Store {
                 if (h.reminder != null) put("reminder", h.reminder)
                 put("created", h.created)
                 put("perWeek", h.perWeek)
+                put("note", h.note)
             })
         }
         val lo = JSONObject()
@@ -109,8 +115,10 @@ object Store {
     fun tap(ctx: Context, h: Habit, date: LocalDate) {
         val c = count(h, date)
         when (h.type) {
-            HabitType.CHECK, HabitType.QUIT -> setCount(ctx, h, date, if (c > 0) 0 else 1)
+            HabitType.CHECK, HabitType.QUIT, HabitType.SUCCEED -> setCount(ctx, h, date, if (c > 0) 0 else 1)
             HabitType.COUNT -> if (c < h.target) setCount(ctx, h, date, c + 1)
+            // One-time task done → it disappears.
+            HabitType.ONCE, HabitType.HOMEWORK -> if (!JewishDays.restNow()) deleteHabit(ctx, h.id)
         }
     }
 
@@ -126,6 +134,13 @@ object Store {
     fun saveHabit(ctx: Context, h: Habit) {
         val i = habits.indexOfFirst { it.id == h.id }
         if (i >= 0) habits[i] = h else habits += h
+        changed(ctx)
+    }
+
+    /** Undo for a one-time task that was just marked done: put it back where it was. */
+    fun restore(ctx: Context, h: Habit, index: Int) {
+        if (habits.any { it.id == h.id }) return
+        habits.add(index.coerceIn(0, habits.size), h)
         changed(ctx)
     }
 
@@ -151,13 +166,16 @@ fun Habit.createdDate(): LocalDate = LocalDate.parse(created)
 /** Big counted habits use the number wheel; small ones (like 8 cups) stay one tap = +1. */
 fun Habit.usesWheel() = type == HabitType.COUNT && target > 10
 
-val Habit.isWeekly get() = perWeek > 0 && type != HabitType.QUIT
+/** One-time task (ONCE / HOMEWORK): no days, no streak, deleted when done. */
+val Habit.isTask get() = type == HabitType.ONCE || type == HabitType.HOMEWORK
+
+val Habit.isWeekly get() = perWeek > 0 && type != HabitType.QUIT && !isTask
 
 /** A day the habit can be done on at all: from its start, never Shabbat or a holiday. */
 fun Habit.available(date: LocalDate) = !date.isBefore(createdDate()) && !JewishDays.isRestDay(date)
 
 /** On the list for that day (picked day, not Shabbat/chag). Weekly habits have no fixed days. */
-fun Habit.scheduled(date: LocalDate) = !isWeekly && available(date) && date.dayOfWeek.value in days
+fun Habit.scheduled(date: LocalDate) = !isTask && !isWeekly && available(date) && date.dayOfWeek.value in days
 
 /**
  * Must be done or the streak breaks. Erev Shabbat/chag is a short day, so there it's
@@ -168,7 +186,7 @@ fun Habit.required(date: LocalDate) =
 
 /** Done on a day it wasn't required (erev, or motzaei Shabbat) – adds to the streak, never breaks it. */
 fun Habit.bonus(date: LocalDate) =
-    type != HabitType.QUIT && !isWeekly && !date.isBefore(createdDate()) && !required(date) &&
+    type != HabitType.QUIT && !isTask && !isWeekly && !date.isBefore(createdDate()) && !required(date) &&
         (scheduled(date) || JewishDays.isRestDay(date)) && done(date)
 
 /** Can it be marked on that day (in the app list and the widget)? */
@@ -190,14 +208,16 @@ fun Habit.weekComplete(date: LocalDate) = weekCount(weekStart(date)) >= weekGoal
 
 /** Show it on today's list (and in the widget)? */
 fun Habit.activeOn(date: LocalDate) =
-    if (isWeekly) available(date) && (!weekComplete(date) || done(date)) else scheduled(date)
+    if (isTask) true
+    else if (isWeekly) available(date) && (!weekComplete(date) || done(date)) else scheduled(date)
 
 fun Habit.done(date: LocalDate): Boolean {
     val c = Store.count(this, date)
     return when (type) {
-        HabitType.CHECK -> c >= 1
+        HabitType.CHECK, HabitType.SUCCEED -> c >= 1
         HabitType.COUNT -> c >= target
         HabitType.QUIT -> c == 0
+        HabitType.ONCE, HabitType.HOMEWORK -> c >= 1
     }
 }
 
@@ -206,6 +226,7 @@ fun Habit.done(date: LocalDate): Boolean {
  * are skipped, so they never break the streak. Today only counts once it's done.
  */
 fun Habit.streak(today: LocalDate = LocalDate.now()): Int {
+    if (isTask) return 0
     if (isWeekly) return weekStreak(today)
     var s = 0
     var d = today
@@ -256,6 +277,7 @@ private fun Habit.bestWeekStreak(today: LocalDate): Int {
 }
 
 fun Habit.bestStreak(today: LocalDate = LocalDate.now()): Int {
+    if (isTask) return 0
     if (isWeekly) return bestWeekStreak(today)
     var best = 0
     var run = 0
