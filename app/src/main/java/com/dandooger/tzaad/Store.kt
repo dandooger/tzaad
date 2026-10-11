@@ -44,6 +44,8 @@ object Store {
     val categories = mutableListOf<Category>()
     // date -> (habit id -> count). For QUIT habits, 1 means "slipped".
     private val log = mutableMapOf<String, MutableMap<String, Int>>()
+    // date -> how many one-time tasks were finished (they're deleted, but still count in "X מתוך Y").
+    private val taskLog = mutableMapOf<String, Int>()
     private var loaded = false
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("tzaad", Context.MODE_PRIVATE)
@@ -79,6 +81,9 @@ object Store {
         } else {
             categories += DEFAULT_CATEGORIES.map { Category(name = it) }
         }
+        val tl = JSONObject(p.getString("taskLog", "{}"))
+        val weekAgo = LocalDate.now().minusDays(7).toString()
+        for (date in tl.keys()) if (date >= weekAgo) taskLog[date] = tl.getInt(date)
         val lo = JSONObject(p.getString("log", "{}"))
         for (date in lo.keys()) {
             val d = lo.getJSONObject(date)
@@ -112,6 +117,7 @@ object Store {
         prefs(ctx).edit()
             .putString("habits", arr.toString())
             .putString("log", lo.toString())
+            .putString("taskLog", JSONObject(taskLog as Map<*, *>).toString())
             .putString("categories", ca.toString())
             .apply()
     }
@@ -124,6 +130,8 @@ object Store {
     }
 
     fun habit(id: String) = habits.find { it.id == id }
+
+    fun tasksDone(date: LocalDate) = taskLog[date.toString()] ?: 0
 
     fun count(h: Habit, date: LocalDate) = log[date.toString()]?.get(h.id) ?: 0
 
@@ -144,7 +152,10 @@ object Store {
             HabitType.CHECK, HabitType.QUIT, HabitType.SUCCEED -> setCount(ctx, h, date, if (c > 0) 0 else 1)
             HabitType.COUNT -> if (c < h.target) setCount(ctx, h, date, c + 1)
             // One-time task done → it disappears.
-            HabitType.ONCE, HabitType.HOMEWORK -> if (!JewishDays.restNow()) deleteHabit(ctx, h.id)
+            HabitType.ONCE, HabitType.HOMEWORK -> if (!JewishDays.restNow()) {
+                taskLog[date.toString()] = tasksDone(date) + 1
+                deleteHabit(ctx, h.id)
+            }
         }
     }
 
@@ -167,6 +178,8 @@ object Store {
     fun restore(ctx: Context, h: Habit, index: Int) {
         if (habits.any { it.id == h.id }) return
         habits.add(index.coerceIn(0, habits.size), h)
+        val today = LocalDate.now().toString()
+        taskLog[today] = ((taskLog[today] ?: 0) - 1).coerceAtLeast(0)
         changed(ctx)
     }
 
@@ -390,4 +403,14 @@ fun Habit.totalDone(today: LocalDate = LocalDate.now()): Int {
         d = d.plusDays(1)
     }
     return n
+}
+
+/**
+ * "X מתוך Y" for today: everything on today's list, of every kind, plus one-time tasks
+ * already finished today (they were deleted when done).
+ */
+fun todayProgress(today: LocalDate, list: List<Habit>): Pair<Int, Int> {
+    val finishedTasks = Store.tasksDone(today)
+    val done = list.count { !it.isTask && it.done(today) } + finishedTasks
+    return done to list.size + finishedTasks
 }

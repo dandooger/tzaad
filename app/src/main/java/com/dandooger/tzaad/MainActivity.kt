@@ -184,8 +184,8 @@ fun TodayScreen(today: LocalDate, open: (String) -> Unit, add: () -> Unit, reord
     val todays = Store.habits.filter { it.markableOn(today) }
     val others = Store.habits.filter { !it.markableOn(today) }
     // Today's score counts the daily habits; weekly ones have their own weekly goal.
-    val daily = todays.filter { it.scheduled(today) || (it.isWeekly && it.available(today)) }
-    val done = daily.count { it.done(today) }
+    // Every kind counts: daily, weekly, quit, succeed, one-time tasks and homework.
+    val (done, total) = todayProgress(today, todays)
     val candle = JewishDays.candleToday(today)
     val ctx = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
@@ -218,7 +218,7 @@ fun TodayScreen(today: LocalDate, open: (String) -> Unit, add: () -> Unit, reord
             item { Header(today, if (Store.habits.size > 1) reorder else null) }
             if (rest != null) item { MotzaeiBanner(rest) }
             if (candle != null) item { ErevBanner(JewishDays.restName(today.plusDays(1)) ?: "שבת", candle) }
-            if (daily.isNotEmpty()) item { ProgressCard(done, daily.size) }
+            if (total > 0) item { ProgressCard(done, total) }
             if (Store.habits.isEmpty()) item { EmptyState(add) }
             val groups = Store.grouped(todays)
             val showTitles = groups.any { it.first != null }

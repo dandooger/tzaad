@@ -75,16 +75,14 @@ class TzaadWidget : AppWidgetProvider() {
             val list = widgetHabits(today)
 
             v.setOnClickPendingIntent(R.id.header, openApp(ctx))
-            // Today's score counts the daily habits; weekly ones have their own weekly goal.
-            val daily = if (rest != null) emptyList()
-            else list.filter { it.scheduled(today) || (it.isWeekly && it.available(today)) }
-            val doneCount = daily.count { it.done(today) }
+            // Every kind counts, like in the app.
+            val (doneCount, total) = if (rest != null) 0 to 0 else todayProgress(today, list)
             v.setTextViewText(
                 R.id.progress,
                 when {
-                    daily.isEmpty() -> ""
-                    doneCount == daily.size -> "הכול בוצע ✓"
-                    else -> "$doneCount מתוך ${daily.size}"
+                    total == 0 -> ""
+                    doneCount == total -> "הכול בוצע ✓"
+                    else -> "$doneCount מתוך $total"
                 }
             )
 
