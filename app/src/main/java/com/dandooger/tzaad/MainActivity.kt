@@ -183,7 +183,6 @@ fun TodayScreen(today: LocalDate, open: (String) -> Unit, add: () -> Unit, reord
     val rest = JewishDays.restName(today)
     val todays = Store.habits.filter { it.markableOn(today) }
     val others = Store.habits.filter { !it.markableOn(today) }
-    // Today's score counts the daily habits; weekly ones have their own weekly goal.
     // Every kind counts: daily, weekly, quit, succeed, one-time tasks and homework.
     val (done, total) = todayProgress(today, todays)
     val candle = JewishDays.candleToday(today)
