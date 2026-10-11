@@ -1,13 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
-<TextView xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/header_text"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:layoutDirection="rtl"
-    android:paddingStart="4dp"
-    android:paddingTop="6dp"
-    android:paddingEnd="4dp"
-    android:paddingBottom="1dp"
-    android:textColor="#B5D4F4"
-    android:textSize="13sp"
-    android:textStyle="bold" />
+    android:orientation="vertical">
+
+    <!-- Thin black line where one category ends and the next begins -->
+    <FrameLayout
+        android:id="@+id/header_line"
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginTop="6dp"
+        android:background="#000000" />
+
+    <TextView
+        android:id="@+id/header_text"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingStart="4dp"
+        android:paddingTop="5dp"
+        android:paddingEnd="4dp"
+        android:paddingBottom="1dp"
+        android:textColor="#B5D4F4"
+        android:textSize="13sp"
+        android:textStyle="bold" />
+</LinearLayout>

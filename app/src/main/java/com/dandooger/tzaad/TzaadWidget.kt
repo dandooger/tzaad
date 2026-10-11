@@ -156,6 +156,7 @@ class WidgetListService : RemoteViewsService() {
             if (row.habit == null) {
                 return RemoteViews(ctx.packageName, R.layout.widget_header).apply {
                     setTextViewText(R.id.header_text, row.title ?: "")
+                    setViewVisibility(R.id.header_line, if (position == 0) View.GONE else View.VISIBLE)
                 }
             }
             val v = RemoteViews(ctx.packageName, R.layout.widget_row)

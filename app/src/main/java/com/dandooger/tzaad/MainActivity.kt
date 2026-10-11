@@ -222,8 +222,14 @@ fun TodayScreen(today: LocalDate, open: (String) -> Unit, add: () -> Unit, reord
             if (Store.habits.isEmpty()) item { EmptyState(add) }
             val groups = Store.grouped(todays)
             val showTitles = groups.any { it.first != null }
-            for ((cat, hs) in groups) {
-                if (showTitles) item(key = "cat-" + (cat?.id ?: "none")) { SectionTitle(cat?.name ?: "בלי קטגוריה") }
+            groups.forEachIndexed { gi, (cat, hs) ->
+                if (showTitles) item(key = "cat-" + (cat?.id ?: "none")) {
+                    Column {
+                        // Thin black line where one category ends and the next begins.
+                        if (gi > 0) Box(Modifier.fillMaxWidth().padding(top = 6.dp).height(1.dp).background(Color.Black))
+                        SectionTitle(cat?.name ?: "בלי קטגוריה")
+                    }
+                }
                 items(hs, key = { it.id }) { h ->
                     HabitCard(h, today, active = true, onOpen = { open(h.id) }, onTaskDone = { taskDone(h) })
                 }

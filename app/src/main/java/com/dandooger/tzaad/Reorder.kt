@@ -141,13 +141,107 @@ fun SectionTitle(text: String) {
     )
 }
 
-/** Order the habits inside each category (the same order shows in the widget). */
+/** One line in the sorting screen: a category title (id "" = "בלי קטגוריה") or a habit. */
+private data class Entry(val id: String, val isHeader: Boolean)
+
+/** Categories in order, each followed by its habits; "בלי קטגוריה" always last. */
+private fun buildEntries(): List<Entry> {
+    val list = mutableListOf<Entry>()
+    val known = Store.categories.map { it.id }.toSet()
+    for (c in Store.categories) {
+        list += Entry(c.id, true)
+        Store.habits.filter { it.category == c.id }.forEach { list += Entry(it.id, false) }
+    }
+    list += Entry("", true)
+    Store.habits.filter { it.category !in known }.forEach { list += Entry(it.id, false) }
+    return list
+}
+
+/** Split the list into blocks: a title and the habits under it. */
+private fun blocks(entries: List<Entry>): MutableList<List<Entry>> {
+    val out = mutableListOf<MutableList<Entry>>()
+    for (e in entries) if (e.isHeader) out += mutableListOf(e) else out.last() += e
+    return out.map { it.toList() }.toMutableList()
+}
+
+private fun Modifier.dragHandle(key1: Any, key2: Any, onStart: () -> Unit, onDrag: (Float) -> Unit, onEnd: () -> Unit) =
+    pointerInput(key1, key2) {
+        detectDragGestures(
+            onDragStart = { onStart() },
+            onDrag = { change, amount ->
+                change.consume()
+                onDrag(amount.y)
+            },
+            onDragEnd = { onEnd() },
+            onDragCancel = { onEnd() },
+        )
+    }
+
+/**
+ * Everything in one list. Drag a habit ⠿ anywhere – also into another category.
+ * Drag a category ⠿ and the list folds to just the categories; it moves with all its habits.
+ */
 @Composable
 fun ReorderScreen(back: () -> Unit, categories: () -> Unit) {
     Store.version.value
     val ctx = LocalContext.current
-    val groups = Store.grouped(Store.habits.toList())
-    val showTitles = groups.any { it.first != null }
+    // Rebuild only when the layout really changed (not on every clock tick).
+    val signature = Store.categories.joinToString { it.id } + "|" +
+        Store.habits.joinToString { it.id + ":" + it.category }
+    val entries = remember(signature) { buildEntries().toMutableStateList() }
+    var dragId by remember { mutableStateOf<String?>(null) }
+    var catDrag by remember { mutableStateOf(false) }
+    var offset by remember { mutableFloatStateOf(0f) }
+    val stepPx = with(LocalDensity.current) { (ROW_HEIGHT + ROW_GAP).toPx() }
+
+    fun save() {
+        var cat = ""
+        val catOrder = mutableListOf<String>()
+        val habitOrder = mutableListOf<Pair<String, String>>()
+        for (e in entries) {
+            if (e.isHeader) {
+                cat = e.id
+                if (e.id.isNotEmpty()) catOrder += e.id
+            } else habitOrder += e.id to cat
+        }
+        Store.applyLayout(ctx, catOrder, habitOrder)
+    }
+
+    fun end() {
+        dragId = null
+        catDrag = false
+        offset = 0f
+        save()
+    }
+
+    fun dragHabit(dy: Float) {
+        val id = dragId ?: return
+        offset += dy
+        val from = entries.indexOfFirst { it.id == id && !it.isHeader }
+        if (from < 0) return
+        // Never above the first title.
+        val to = (from + (offset / stepPx).roundToInt()).coerceIn(1, entries.lastIndex)
+        if (to != from) {
+            entries.add(to, entries.removeAt(from))
+            offset -= (to - from) * stepPx
+        }
+    }
+
+    fun dragCategory(dy: Float) {
+        val id = dragId ?: return
+        offset += dy
+        val bs = blocks(entries)
+        val from = bs.indexOfFirst { it.first().id == id }
+        if (from < 0) return
+        // "בלי קטגוריה" stays last.
+        val to = (from + (offset / stepPx).roundToInt()).coerceIn(0, bs.lastIndex - 1)
+        if (to != from) {
+            bs.add(to, bs.removeAt(from))
+            entries.clear()
+            entries.addAll(bs.flatten())
+            offset -= (to - from) * stepPx
+        }
+    }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -155,21 +249,85 @@ fun ReorderScreen(back: () -> Unit, categories: () -> Unit) {
             Text("סידור", fontSize = 22.sp, fontWeight = FontWeight.Bold)
         }
         Text(
-            "תחזיק את ⠿ וגרור למעלה או למטה. ככה זה יופיע גם בווידג'ט.\n" +
-                "כדי להעביר הרגל לקטגוריה אחרת – לחץ עליו במסך הראשי ואז ✏️.",
+            "תחזיק את ⠿ וגרור. משימה אפשר לגרור גם לתוך קטגוריה אחרת.\n" +
+                "כשגוררים קטגוריה – כל מה שבתוכה זז איתה. ככה זה יופיע גם בווידג'ט.",
             color = Gray, fontSize = 14.sp, modifier = Modifier.padding(bottom = 8.dp),
         )
         OutlinedButton(onClick = categories, modifier = Modifier.fillMaxWidth()) {
-            Text("🗂️ הקטגוריות שלי – להוסיף, למחוק ולסדר", fontSize = 15.sp)
+            Text("🗂️ להוסיף, לשנות שם או למחוק קטגוריות", fontSize = 15.sp)
         }
+        Spacer(Modifier.height(12.dp))
 
-        for ((cat, hs) in groups) {
-            if (showTitles) SectionTitle(cat?.name ?: "בלי קטגוריה")
-            DragList(
-                ids = hs.map { it.id },
-                label = { id -> Store.habit(id)?.let { "${it.emoji} ${it.name}" } ?: "" },
-                onMoved = { Store.reorderWithin(ctx, it) },
-            )
+        val shown = if (catDrag) entries.filter { it.isHeader } else entries
+        shown.forEachIndexed { index, e ->
+            key(e.id, e.isHeader) {
+                val dragging = e.id == dragId && e.isHeader == catDrag
+                val moving = Modifier
+                    .zIndex(if (dragging) 1f else 0f)
+                    .graphicsLayer {
+                        translationY = if (dragging) offset else 0f
+                        scaleX = if (dragging) 1.03f else 1f
+                        scaleY = if (dragging) 1.03f else 1f
+                    }
+                if (e.isHeader) {
+                    Column(moving.fillMaxWidth().height(ROW_HEIGHT)) {
+                        // Thin black line where one category ends and the next begins.
+                        if (index > 0) Box(Modifier.fillMaxWidth().height(1.dp).background(Color.Black))
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .weight(1f)
+                                .background(if (dragging) LightBlue else Color.Transparent),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                if (e.id.isEmpty()) "בלי קטגוריה" else Store.category(e.id)?.name ?: "",
+                                fontSize = 17.sp, fontWeight = FontWeight.Bold, color = DarkBlue,
+                                modifier = Modifier.weight(1f).padding(start = 4.dp),
+                            )
+                            if (e.id.isNotEmpty()) {
+                                Box(
+                                    Modifier.size(ROW_HEIGHT).dragHandle(
+                                        e.id, entries,
+                                        onStart = { dragId = e.id; catDrag = true; offset = 0f },
+                                        onDrag = { dragCategory(it) },
+                                        onEnd = { end() },
+                                    ),
+                                    contentAlignment = Alignment.Center,
+                                ) { Text("⠿", fontSize = 28.sp, color = DarkBlue) }
+                            }
+                        }
+                    }
+                } else {
+                    val h = Store.habit(e.id)
+                    Row(
+                        moving
+                            .fillMaxWidth()
+                            .padding(start = 16.dp)
+                            .height(ROW_HEIGHT)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(if (dragging) LightBlue else Color.White)
+                            .border(if (dragging) 2.dp else 1.dp, if (dragging) Blue else Line, RoundedCornerShape(16.dp))
+                            .padding(start = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            h?.let { "${it.emoji} ${it.name}" } ?: "",
+                            fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f),
+                        )
+                        Box(
+                            Modifier.size(ROW_HEIGHT).dragHandle(
+                                e.id, entries,
+                                onStart = { dragId = e.id; catDrag = false; offset = 0f },
+                                onDrag = { dragHabit(it) },
+                                onEnd = { end() },
+                            ),
+                            contentAlignment = Alignment.Center,
+                        ) { Text("⠿", fontSize = 28.sp, color = Gray) }
+                    }
+                }
+                Spacer(Modifier.height(ROW_GAP))
+            }
         }
 
         Spacer(Modifier.height(8.dp))

@@ -181,6 +181,20 @@ object Store {
         changed(ctx)
     }
 
+    /** Save the sorting screen: category order, habit order, and which category each habit is in. */
+    fun applyLayout(ctx: Context, catOrder: List<String>, habitOrder: List<Pair<String, String>>) {
+        val cById = categories.associateBy { it.id }
+        val newCats = catOrder.mapNotNull { cById[it] }
+        val hById = habits.associateBy { it.id }
+        val newHabits = habitOrder.mapNotNull { (id, cat) -> hById[id]?.copy(category = cat) }
+        if (newCats.size != categories.size || newHabits.size != habits.size) return
+        categories.clear()
+        categories += newCats
+        habits.clear()
+        habits += newHabits
+        changed(ctx)
+    }
+
     // ── Categories ──
 
     fun category(id: String) = categories.find { it.id == id }
