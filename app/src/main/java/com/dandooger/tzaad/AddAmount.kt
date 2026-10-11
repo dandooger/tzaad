@@ -133,8 +133,7 @@ fun SucceedDialog(h: Habit, onDismiss: () -> Unit) {
         text = {
             Text(
                 if (done) "סימנת שהצלחת היום. לבטל?"
-                else "🏆 ${h.streak(today)} ימים ברצף.
-הצלחת היום?",
+                else "🏆 ${h.streak(today)} ימים ברצף.\nהצלחת היום?",
                 fontSize = 16.sp,
             )
         },
