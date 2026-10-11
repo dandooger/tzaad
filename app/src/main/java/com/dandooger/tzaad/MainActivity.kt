@@ -29,6 +29,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -611,6 +612,7 @@ fun EditScreen(existing: Habit?, onDone: () -> Unit, onDeleted: () -> Unit, onRe
     var note by remember { mutableStateOf(existing?.note ?: "") }
     var category by remember { mutableStateOf(existing?.category ?: "") }
     var addingCategory by remember { mutableStateOf(false) }
+    var pickingEmoji by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val isTask = type == HabitType.ONCE || type == HabitType.HOMEWORK
     val isHomework = type == HabitType.HOMEWORK
@@ -694,7 +696,9 @@ fun EditScreen(existing: Habit?, onDone: () -> Unit, onDeleted: () -> Unit, onRe
 
         Label("בחר אמוג'י")
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            EMOJIS.forEach { e ->
+            // An emoji picked from the keyboard shows first, so you can see it's chosen.
+            val shown = if (emoji in EMOJIS) EMOJIS else listOf(emoji) + EMOJIS
+            shown.forEach { e ->
                 Box(
                     Modifier
                         .size(48.dp)
@@ -705,6 +709,15 @@ fun EditScreen(existing: Habit?, onDone: () -> Unit, onDeleted: () -> Unit, onRe
                     contentAlignment = Alignment.Center,
                 ) { Text(e, fontSize = 24.sp) }
             }
+            // ➕ = any emoji from the phone's own keyboard (with its search).
+            Box(
+                Modifier
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(Blue)
+                    .clickable { pickingEmoji = true },
+                contentAlignment = Alignment.Center,
+            ) { Text("➕", fontSize = 20.sp, color = Color.White) }
         }
 
         if (type == HabitType.COUNT) {
@@ -800,6 +813,13 @@ fun EditScreen(existing: Habit?, onDone: () -> Unit, onDeleted: () -> Unit, onRe
             }
         }
         Spacer(Modifier.height(24.dp))
+    }
+
+    if (pickingEmoji) {
+        EmojiKeyboardDialog(
+            onPicked = { emoji = it; pickingEmoji = false },
+            onDismiss = { pickingEmoji = false },
+        )
     }
 
     if (addingCategory) {
@@ -908,3 +928,62 @@ fun DayChip(label: String, selected: Boolean, rest: Boolean, onClick: () -> Unit
 }
 
 fun fmtTime(minutes: Int) = "%02d:%02d".format(minutes / 60, minutes % 60)
+
+/** The last emoji in [text] (whole emoji, incl. skin tones and flags), or null if there's none. */
+fun lastEmoji(text: String): String? {
+    val it = android.icu.text.BreakIterator.getCharacterInstance()
+    it.setText(text)
+    var end = it.last()
+    var start = it.previous()
+    while (start != android.icu.text.BreakIterator.DONE) {
+        val g = text.substring(start, end)
+        val isEmoji = g.codePoints().anyMatch { cp ->
+            cp >= 0x1F000 || Character.getType(cp) == Character.OTHER_SYMBOL.toInt()
+        }
+        if (isEmoji) return g
+        end = start
+        start = it.previous()
+    }
+    return null
+}
+
+/**
+ * Opens the phone's own keyboard. Pick any emoji there (its search works too) –
+ * the moment one is typed it's chosen and the window closes.
+ */
+@Composable
+fun EmojiKeyboardDialog(onPicked: (String) -> Unit, onDismiss: () -> Unit) {
+    var text by remember { mutableStateOf("") }
+    val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(150)
+        focus.requestFocus()
+        keyboard?.show()
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("בחר אימוג'י מהמקלדת") },
+        text = {
+            Column {
+                Text(
+                    "לחץ במקלדת על 😊 כדי לפתוח את האימוג'ים. יש שם גם חיפוש 🔍",
+                    color = Gray, fontSize = 14.sp,
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { v ->
+                        text = v
+                        lastEmoji(v)?.let(onPicked)
+                    },
+                    placeholder = { Text("😊") },
+                    singleLine = true,
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 28.sp),
+                    modifier = Modifier.fillMaxWidth().focusRequester(focus),
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("ביטול") } },
+    )
+}
